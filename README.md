@@ -1,21 +1,16 @@
 # keirin-value-app
 
-## Ver.0.3.1
+## Ver.0.3.2
 
-オッズ取得時にPlaywrightまたはChromiumがクラッシュすると、以前はStreamlit本体まで
-終了する可能性がありました。
+オッズ取得時のPython強制終了を回避するため、
+オッズ取得処理からChromiumを完全に外しました。
 
-Ver.0.3.1では、オッズ取得を別Pythonプロセスで実行します。
+### 変更点
 
-- Chromiumが落ちてもアプリ画面は継続
-- Workerの終了コードを表示
-- 標準エラーを自己診断欄へ表示
-- 120秒でタイムアウト
-- ページ再描画のたびにselect要素を取得し直す
+- オッズ取得はHTTP通信のみ
+- HTML内の埋め込みJSONを解析
+- JSONで取れない場合はHTMLテキストを解析
+- エラー時もStreamlitは終了しない
+- 人気順位がない場合はオッズ順で補完
 
-## 更新ファイル
-
-- main.py
-- odds_scraper.py
-- odds_worker.py
-- README.md
+開催一覧取得には、既存のrace_catalog.pyを使用します。
