@@ -1,25 +1,21 @@
 # keirin-value-app
 
-## Ver.0.3
+## Ver.0.3.1
 
-選択したレースの出走表URLから、対応するWINTICKETオッズURLを自動生成し、
-3連単の人気順オッズを取得します。
+オッズ取得時にPlaywrightまたはChromiumがクラッシュすると、以前はStreamlit本体まで
+終了する可能性がありました。
 
-### 新機能
+Ver.0.3.1では、オッズ取得を別Pythonプロセスで実行します。
 
-- 出走表URLからオッズURLを自動生成
-- 3連単・人気順を自動選択
-- 50件単位の表示範囲を順番に取得
-- 取得結果を表で表示
-- CSVダウンロード
-- 取得ログと自己診断
+- Chromiumが落ちてもアプリ画面は継続
+- Workerの終了コードを表示
+- 標準エラーを自己診断欄へ表示
+- 120秒でタイムアウト
+- ページ再描画のたびにselect要素を取得し直す
 
-### 更新方法
+## 更新ファイル
 
-1. ZIP内のファイルをリポジトリ直下へ上書き
-2. 起動中なら `Control + C` で停止
-3. `run.command`を再実行
-4. GitHub DesktopでCommit
-5. Push origin
-
-追加ライブラリはないため、通常はinstall.commandの再実行は不要です。
+- main.py
+- odds_scraper.py
+- odds_worker.py
+- README.md

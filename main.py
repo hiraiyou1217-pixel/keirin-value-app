@@ -3,11 +3,11 @@ import pandas as pd
 import streamlit as st
 
 from race_catalog import fetch_race_catalog
-from odds_scraper import fetch_trifecta_odds
+from odds_scraper import fetch_trifecta_odds_safe
 
 st.set_page_config(page_title="競輪 妙味期待値アプリ", layout="wide")
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.0.3：レース選択・3連単オッズ自動取得")
+st.caption("Ver.0.3.1：オッズ取得処理を別プロセスへ分離")
 
 selected_date = st.date_input("開催日", value=date.today())
 
@@ -50,10 +50,11 @@ if catalog:
         st.code(selected_race["url"], language=None)
 
     if st.button("3連単オッズを取得", type="primary"):
-        with st.spinner("WINTICKETから3連単オッズを取得しています"):
-            odds, logs = fetch_trifecta_odds(
+        with st.spinner("別プロセスで3連単オッズを取得しています"):
+            odds, logs = fetch_trifecta_odds_safe(
                 selected_race["url"],
                 headless=not show_browser,
+                timeout_seconds=120,
             )
         st.session_state.odds = odds
         st.session_state.odds_logs = logs
@@ -77,6 +78,11 @@ if catalog:
             csv_bytes,
             file_name=f"{selected_date:%Y%m%d}_{venue}_{selected_label}_trifecta_odds.csv",
             mime="text/csv",
+        )
+    elif st.session_state.odds_logs:
+        st.error(
+            "オッズを取得できませんでした。アプリ本体は継続しています。"
+            "下の「取得ログ・自己診断」を確認してください。"
         )
     else:
         st.info("競輪場とレース番号を選び、「3連単オッズを取得」を押してください。")
