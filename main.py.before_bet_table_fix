@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.5.5：買い目一覧表示修正版")
+st.caption("Ver.1.5.4：候補0件明示版")
 
 
 def make_csv(
@@ -918,47 +918,56 @@ if expected_values:
                 f"{total_expected_profit:+,.0f}円",
             )
 
-        plan_table_rows = []
+        plan_rows = []
 
         for index, row in enumerate(
             bet_plan,
             start=1,
         ):
-            plan_table_rows.append(
-                {
-                    "順位": index,
-                    "組番": str(row["組番"]),
-                    "人気": int(row["人気"]),
-                    "オッズ": round(
-                        float(row["オッズ"]),
-                        1,
-                    ),
-                    "モデル確率": (
-                        f"{float(row['モデル確率']) * 100:.3f}%"
-                    ),
-                    "期待回収率": round(
-                        float(row["期待回収率"]),
-                        3,
-                    ),
-                    "購入額": (
-                        f"{int(row['購入額']):,}円"
-                    ),
-                    "的中時払戻": (
-                        f"{int(row['的中時払戻']):,}円"
-                    ),
-                    "期待利益": (
-                        f"{float(row['期待利益']):+,.0f}円"
-                    ),
-                    "予算比率": (
-                        f"{float(row['予算比率']) * 100:.1f}%"
-                    ),
-                }
+            plan_rows.append(
+                f"""
+                <tr>
+                    <td>{index}</td>
+                    <td>{row['組番']}</td>
+                    <td>{row['人気']}</td>
+                    <td>{row['オッズ']:.1f}</td>
+                    <td>{row['モデル確率'] * 100:.3f}%</td>
+                    <td>{row['期待回収率']:.3f}</td>
+                    <td>{row['購入額']:,}円</td>
+                    <td>{row['的中時払戻']:,}円</td>
+                    <td>{row['期待利益']:+,.0f}円</td>
+                    <td>{row['予算比率'] * 100:.1f}%</td>
+                </tr>
+                """
             )
 
-        st.dataframe(
-            plan_table_rows,
-            use_container_width=True,
-            hide_index=True,
+        plan_html = f"""
+        <div style="max-height:600px;overflow:auto;border:1px solid #ddd;">
+            <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                <thead>
+                    <tr style="position:sticky;top:0;background:#f5f5f5;">
+                        <th>順位</th>
+                        <th>組番</th>
+                        <th>人気</th>
+                        <th>オッズ</th>
+                        <th>モデル確率</th>
+                        <th>期待回収率</th>
+                        <th>購入額</th>
+                        <th>的中時払戻</th>
+                        <th>期待利益</th>
+                        <th>予算比率</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(plan_rows)}
+                </tbody>
+            </table>
+        </div>
+        """
+
+        st.markdown(
+            plan_html,
+            unsafe_allow_html=True,
         )
 
         bet_export_rows = []

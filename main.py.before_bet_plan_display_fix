@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.5.5：買い目一覧表示修正版")
+st.caption("Ver.1.5.2：ワンクリック買い目作成版")
 
 
 def make_csv(
@@ -169,8 +169,6 @@ defaults = {
     "lineup_logs": [],
     "bet_plan": [],
     "bet_plan_message": "",
-    "bet_plan_executed": False,
-    "bet_plan_candidate_count": 0,
     "plan_minimum_return": 1.00,
     "plan_budget": 10_000,
     "plan_maximum_bets": 10,
@@ -572,9 +570,6 @@ if odds:
 
         st.session_state.expected_values = results
         st.session_state.bet_plan = []
-        st.session_state.bet_plan_executed = False
-        st.session_state.bet_plan_message = ""
-        st.session_state.bet_plan_candidate_count = 0
 
 
 expected_values = st.session_state.expected_values
@@ -794,9 +789,7 @@ if expected_values:
             ),
         )
 
-        st.session_state.bet_plan = generated_plan
-        st.session_state.bet_plan_executed = True
-        st.session_state.bet_plan_candidate_count = len(
+        st.session_state.bet_plan = (
             generated_plan
         )
 
@@ -808,7 +801,6 @@ if expected_values:
             st.success(
                 st.session_state.bet_plan_message
             )
-            st.rerun()
         else:
             st.session_state.bet_plan_message = (
                 "現在の設定では購入対象が"
@@ -817,7 +809,6 @@ if expected_values:
             st.warning(
                 st.session_state.bet_plan_message
             )
-            st.rerun()
 
     if st.button(
         "予算から買い目を自動配分",
@@ -836,51 +827,21 @@ if expected_values:
         )
 
         st.session_state.bet_plan = generated_plan
-        st.session_state.bet_plan_executed = True
-        st.session_state.bet_plan_candidate_count = len(
-            positive_kelly_rows
-        )
 
         if not generated_plan:
-            if not qualifying_rows:
-                st.session_state.bet_plan_message = (
-                    "買い目候補は0件です。"
-                    "最低期待回収率を満たす組番がありません。"
-                )
-            elif not positive_kelly_rows:
-                st.session_state.bet_plan_message = (
-                    "買い目候補は0件です。"
-                    "期待回収率の条件を満たしていても、"
-                    "ケリー基準がプラスの組番がありません。"
-                )
-            else:
-                st.session_state.bet_plan_message = (
-                    "買い目候補は0件です。"
-                    "購入単位、予算、1点上限の設定により"
-                    "配分できませんでした。"
-                )
+            st.session_state.bet_plan_message = (
+                "条件を満たす買い目がないため、"
+                "購入プランを作成しませんでした。"
+            )
         else:
             st.session_state.bet_plan_message = (
-                f"買い目候補は{len(generated_plan)}件です。"
+                f"{len(generated_plan)}点の"
+                "買い目プランを作成しました。"
             )
 
-        st.rerun()
-
-    bet_plan = st.session_state.get(
-        "bet_plan",
-        [],
-    )
+    bet_plan = st.session_state.bet_plan
 
     if bet_plan:
-        st.success(
-            st.session_state.get(
-                "bet_plan_message",
-                f"{len(bet_plan)}点の買い目プランを表示します。",
-            )
-        )
-
-        st.markdown("### 作成された買い目プラン")
-
         total_purchase = sum(
             int(row["購入額"])
             for row in bet_plan
@@ -918,47 +879,56 @@ if expected_values:
                 f"{total_expected_profit:+,.0f}円",
             )
 
-        plan_table_rows = []
+        plan_rows = []
 
         for index, row in enumerate(
             bet_plan,
             start=1,
         ):
-            plan_table_rows.append(
-                {
-                    "順位": index,
-                    "組番": str(row["組番"]),
-                    "人気": int(row["人気"]),
-                    "オッズ": round(
-                        float(row["オッズ"]),
-                        1,
-                    ),
-                    "モデル確率": (
-                        f"{float(row['モデル確率']) * 100:.3f}%"
-                    ),
-                    "期待回収率": round(
-                        float(row["期待回収率"]),
-                        3,
-                    ),
-                    "購入額": (
-                        f"{int(row['購入額']):,}円"
-                    ),
-                    "的中時払戻": (
-                        f"{int(row['的中時払戻']):,}円"
-                    ),
-                    "期待利益": (
-                        f"{float(row['期待利益']):+,.0f}円"
-                    ),
-                    "予算比率": (
-                        f"{float(row['予算比率']) * 100:.1f}%"
-                    ),
-                }
+            plan_rows.append(
+                f"""
+                <tr>
+                    <td>{index}</td>
+                    <td>{row['組番']}</td>
+                    <td>{row['人気']}</td>
+                    <td>{row['オッズ']:.1f}</td>
+                    <td>{row['モデル確率'] * 100:.3f}%</td>
+                    <td>{row['期待回収率']:.3f}</td>
+                    <td>{row['購入額']:,}円</td>
+                    <td>{row['的中時払戻']:,}円</td>
+                    <td>{row['期待利益']:+,.0f}円</td>
+                    <td>{row['予算比率'] * 100:.1f}%</td>
+                </tr>
+                """
             )
 
-        st.dataframe(
-            plan_table_rows,
-            use_container_width=True,
-            hide_index=True,
+        plan_html = f"""
+        <div style="max-height:600px;overflow:auto;border:1px solid #ddd;">
+            <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                <thead>
+                    <tr style="position:sticky;top:0;background:#f5f5f5;">
+                        <th>順位</th>
+                        <th>組番</th>
+                        <th>人気</th>
+                        <th>オッズ</th>
+                        <th>モデル確率</th>
+                        <th>期待回収率</th>
+                        <th>購入額</th>
+                        <th>的中時払戻</th>
+                        <th>期待利益</th>
+                        <th>予算比率</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(plan_rows)}
+                </tbody>
+            </table>
+        </div>
+        """
+
+        st.markdown(
+            plan_html,
+            unsafe_allow_html=True,
         )
 
         bet_export_rows = []
@@ -1014,56 +984,32 @@ if expected_values:
         )
 
     else:
-        plan_executed = st.session_state.get(
-            "bet_plan_executed",
-            False,
-        )
-
         plan_message = st.session_state.get(
             "bet_plan_message",
             "",
         )
 
-        if plan_executed:
-            st.error(
-                plan_message
-                or "買い目候補は0件です。"
-            )
+        if plan_message:
+            st.warning(plan_message)
 
-            st.markdown("### 買い目プラン：0件")
-
-            reason_rows = []
-
-            if len(qualifying_rows) == 0:
-                reason_rows.append(
-                    "最低期待回収率以上の組番が0件"
-                )
-
-            if len(positive_kelly_rows) == 0:
-                reason_rows.append(
-                    "ケリー基準がプラスの組番が0件"
-                )
-
-            if int(betting_budget) < int(minimum_unit):
-                reason_rows.append(
-                    "購入予算が購入単位を下回っています"
-                )
-
-            if reason_rows:
-                st.write("作成できなかった理由：")
-
-                for reason in reason_rows:
-                    st.write(f"・{reason}")
-
+        if not qualifying_rows:
             st.info(
-                "動作確認では最低期待回収率を1.00、"
-                "購入予算を10,000円、購入単位を100円に"
-                "設定してください。"
+                "最低期待回収率を超える買い目がありません。"
+                "「最低期待回収率」を1.05または1.00へ"
+                "下げて再計算してください。"
             )
-
+        elif not positive_kelly_rows:
+            st.info(
+                "期待回収率の条件は満たしていますが、"
+                "ケリー基準がプラスになる買い目がありません。"
+            )
+        elif int(betting_budget) < int(minimum_unit):
+            st.info(
+                "購入予算が購入単位より小さいため、"
+                "配分できません。"
+            )
         else:
-            st.info(
-                "まだ買い目プランを作成していません。"
+            st.caption(
                 "設定後に「予算から買い目を自動配分」を"
                 "押してください。"
             )
