@@ -213,12 +213,6 @@ def extract_json_blobs(html: str) -> list[Any]:
 def extract_from_visible_text(
     html: str,
 ) -> list[dict[str, Any]]:
-    """
-    WINTICKET人気順表示を解析する。
-
-    HTML上では各買い目が以下の5要素で並ぶ。
-    人気順位 → 1着車番 → 2着車番 → 3着車番 → オッズ
-    """
     parser = TextExtractor()
     parser.feed(html)
 
@@ -230,78 +224,40 @@ def extract_from_visible_text(
 
     rows: dict[str, dict[str, Any]] = {}
 
-    for index in range(len(lines) - 4):
-        rank_text = lines[index]
-        first_text = lines[index + 1]
-        second_text = lines[index + 2]
-        third_text = lines[index + 3]
-        odds_text = lines[index + 4]
+    for index, line in enumerate(lines):
+        combo = normalise_combo(line)
 
-        if not re.fullmatch(r"\d{1,3}", rank_text):
+        if combo is None:
             continue
 
-        if not all(
-            re.fullmatch(r"[1-9]", value)
-            for value in (
-                first_text,
-                second_text,
-                third_text,
+        neighborhood = lines[
+            max(0, index - 3): min(len(lines), index + 5)
+        ]
+
+        odds = None
+
+        for item in neighborhood:
+            cleaned = (
+                item.replace(",", "")
+                .replace("倍", "")
+                .strip()
             )
-        ):
-            continue
 
-        if len(
-            {
-                first_text,
-                second_text,
-                third_text,
+            if NUMBER_RE.fullmatch(cleaned):
+                number = float(cleaned)
+
+                if 1.0 < number < 1_000_000:
+                    odds = number
+                    break
+
+        if odds is not None:
+            rows[combo] = {
+                "組番": combo,
+                "オッズ": odds,
+                "人気": 9999,
             }
-        ) != 3:
-            continue
 
-        cleaned_odds = (
-            odds_text
-            .replace(",", "")
-            .replace("倍", "")
-            .strip()
-        )
-
-        if not NUMBER_RE.fullmatch(cleaned_odds):
-            continue
-
-        rank = int(rank_text)
-        odds = float(cleaned_odds)
-
-        if not 1 <= rank <= 504:
-            continue
-
-        if not 1.0 < odds < 1_000_000:
-            continue
-
-        combo = (
-            f"{first_text}-"
-            f"{second_text}-"
-            f"{third_text}"
-        )
-
-        existing = rows.get(combo)
-
-        row = {
-            "組番": combo,
-            "オッズ": odds,
-            "人気": rank,
-        }
-
-        if existing is None or rank < existing["人気"]:
-            rows[combo] = row
-
-    return sorted(
-        rows.values(),
-        key=lambda row: (
-            row["人気"],
-            row["組番"],
-        ),
-    )
+    return list(rows.values())
 
 
 def fetch_trifecta_odds_http(
