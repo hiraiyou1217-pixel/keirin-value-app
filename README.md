@@ -1,2 +1,23 @@
 # keirin-value-app
-Keirin Expected Value Calculator
+
+競輪3連単の妙味期待値を計算するアプリです。
+
+## 現在の段階
+
+この版は、GitHub Desktopへの登録とMacでの起動確認を行うスターター版です。
+
+## Macでの導入
+
+1. `install.command`を右クリックして「開く」
+2. セットアップ完了後、`run.command`を右クリックして「開く」
+3. ブラウザで `http://localhost:8501` が開くことを確認
+
+## 今後追加する機能
+
+- 開催日の選択
+- 競輪場の自動取得
+- レース番号の選択
+- WINTICKETから3連単オッズ取得
+- 独自確率モデル
+- 期待値ランキング
+- CSV出力
