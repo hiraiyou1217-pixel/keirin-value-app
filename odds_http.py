@@ -4,8 +4,11 @@ from html import unescape
 from html.parser import HTMLParser
 import json
 import re
+import ssl
 from typing import Any
 from urllib.error import HTTPError, URLError
+
+import certifi
 from urllib.request import Request, urlopen
 
 
@@ -284,7 +287,15 @@ def fetch_trifecta_odds_http(
     )
 
     try:
-        with urlopen(request, timeout=30) as response:
+        ssl_context = ssl.create_default_context(
+            cafile=certifi.where()
+        )
+
+        with urlopen(
+            request,
+            timeout=30,
+            context=ssl_context,
+        ) as response:
             status = getattr(response, "status", 200)
             charset = (
                 response.headers.get_content_charset()
