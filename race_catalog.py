@@ -9,41 +9,63 @@ from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 BASE_URL = "https://www.winticket.jp"
-VENUE_RE = re.compile(r"/keirin/([^/]+)/racecard/(\d{10,})/?$")
-RACE_TEXT_RE = re.compile(r"(?<!\d)(1[0-2]|[1-9])\s*R\b", re.IGNORECASE)
+
+# 現在のWINTICKETレースURL例:
+# /keirin/toyohashi/racecard/2026072545/4/1
+RACE_URL_RE = re.compile(
+    r"/keirin/([^/]+)/racecard/(\d+)/(\d+)/(\d+)/?$"
+)
+
+VENUE_NAMES = {
+    "hakodate": "函館競輪",
+    "aomori": "青森競輪",
+    "iwakitaira": "いわき平競輪",
+    "yahiko": "弥彦競輪",
+    "maebashi": "前橋競輪",
+    "toride": "取手競輪",
+    "utsunomiya": "宇都宮競輪",
+    "omiya": "大宮競輪",
+    "seibuen": "西武園競輪",
+    "keiokaku": "京王閣競輪",
+    "tachikawa": "立川競輪",
+    "matsudo": "松戸競輪",
+    "chiba": "千葉競輪",
+    "kawasaki": "川崎競輪",
+    "hiratsuka": "平塚競輪",
+    "odawara": "小田原競輪",
+    "ito": "伊東競輪",
+    "shizuoka": "静岡競輪",
+    "nagoya": "名古屋競輪",
+    "gifu": "岐阜競輪",
+    "ogaki": "大垣競輪",
+    "toyohashi": "豊橋競輪",
+    "toyama": "富山競輪",
+    "matsusaka": "松阪競輪",
+    "yokkaichi": "四日市競輪",
+    "fukui": "福井競輪",
+    "nara": "奈良競輪",
+    "mukomachi": "向日町競輪",
+    "wakayama": "和歌山競輪",
+    "kishiwada": "岸和田競輪",
+    "tamano": "玉野競輪",
+    "hiroshima": "広島競輪",
+    "hofu": "防府競輪",
+    "takamatsu": "高松競輪",
+    "komatsushima": "小松島競輪",
+    "kochi": "高知競輪",
+    "matsuyama": "松山競輪",
+    "kokura": "小倉競輪",
+    "kurume": "久留米競輪",
+    "takeo": "武雄競輪",
+    "sasebo": "佐世保競輪",
+    "beppu": "別府競輪",
+    "kumamoto": "熊本競輪",
+}
 
 
-def _venue_name_from_text(text: str, slug: str) -> str:
-    cleaned = " ".join(text.split())
-    match = re.search(r"([^\s]{1,12}競輪)", cleaned)
-    if match:
-        return match.group(1)
-    return slug
-
-
-def _race_number_from_url_or_text(url: str, text: str) -> int | None:
-    match = RACE_TEXT_RE.search(text)
-    if match:
-        return int(match.group(1))
-
-    digits_match = re.search(r"/racecard/(\d{10,})/?$", url)
-    if not digits_match:
-        return None
-
-    digits = digits_match.group(1)
-    # WINTICKETのイベントID末尾を候補として扱う。
-    candidates = []
-    if len(digits) >= 2:
-        candidates.append(int(digits[-2:]))
-    candidates.append(int(digits[-1:]))
-
-    for candidate in candidates:
-        if 1 <= candidate <= 12:
-            return candidate
-    return None
-
-
-def fetch_race_catalog(selected_date: date) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+def fetch_race_catalog(
+    selected_date: date,
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     date_text = selected_date.strftime("%Y%m%d")
     source_url = f"{BASE_URL}/keirin/racecard/{date_text}"
     logs = [f"取得元: {source_url}"]
@@ -77,48 +99,64 @@ def fetch_race_catalog(selected_date: date) -> tuple[dict[str, list[dict[str, An
         return {}, logs
     except Exception as exc:
         logs.append(f"エラー: {type(exc).__name__}: {exc}")
-        logs.append("install.commandを再実行し、Chromiumが入っているか確認してください。")
+        logs.append(
+            "install.commandを再実行し、Chromiumが入っているか確認してください。"
+        )
         return {}, logs
 
     seen: set[str] = set()
+
     for anchor in anchors:
         href = anchor.get("href", "")
-        text = anchor.get("text", "")
         full_url = urljoin(BASE_URL, href)
-        match = VENUE_RE.search(full_url)
+        match = RACE_URL_RE.search(full_url)
+
         if not match or full_url in seen:
             continue
 
-        slug = match.group(1)
-        race_number = _race_number_from_url_or_text(full_url, text)
-        if race_number is None:
+        venue_slug, event_id, day_number, race_number_text = match.groups()
+        race_number = int(race_number_text)
+
+        if not 1 <= race_number <= 12:
             continue
 
-        venue_name = _venue_name_from_text(text, slug)
+        venue_name = VENUE_NAMES.get(venue_slug, f"{venue_slug}競輪")
+
         grouped[venue_name].append(
             {
                 "race_number": race_number,
                 "url": full_url,
-                "venue_slug": slug,
+                "venue_slug": venue_slug,
+                "event_id": event_id,
+                "day_number": int(day_number),
             }
         )
         seen.add(full_url)
 
     result: dict[str, list[dict[str, Any]]] = {}
+
     for venue, races in grouped.items():
-        unique_by_number = {}
+        unique_by_number: dict[int, dict[str, Any]] = {}
         for race in races:
             unique_by_number[race["race_number"]] = race
-        result[venue] = sorted(unique_by_number.values(), key=lambda x: x["race_number"])
 
-    result = dict(sorted(result.items(), key=lambda x: x[0]))
+        result[venue] = sorted(
+            unique_by_number.values(),
+            key=lambda item: item["race_number"],
+        )
+
+    result = dict(sorted(result.items(), key=lambda item: item[0]))
+
+    logs.append(f"ページ内リンク数: {len(anchors)}")
     logs.append(f"検出競輪場数: {len(result)}")
-    logs.append(f"検出レース数: {sum(len(v) for v in result.values())}")
+    logs.append(f"検出レース数: {sum(len(races) for races in result.values())}")
 
-    if not result:
+    if result:
+        logs.append("検出競輪場: " + "、".join(result.keys()))
+    else:
         logs.append(
-            "開催情報を検出できませんでした。開催のない日、未来日の未掲載、"
-            "またはWINTICKETの画面変更が考えられます。"
+            "開催情報を検出できませんでした。取得ログとWINTICKETのページ構造を"
+            "確認してください。"
         )
 
     return result, logs
