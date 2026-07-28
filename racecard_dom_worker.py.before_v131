@@ -435,13 +435,6 @@ def fetch_racecard_data(
                 "3連対率": parse_float(
                     cell_value(cells, place3_index)
                 ),
-                "コメント": cell_value(
-                    cells,
-                    find_column(
-                        headers,
-                        ("コメント",),
-                    ),
-                ),
             }
 
             riders.append(rider)
@@ -478,8 +471,7 @@ def fetch_racecard_data(
             f"S={rider['S']} "
             f"勝率={rider['勝率']} "
             f"2連対率={rider['2連対率']} "
-            f"3連対率={rider['3連対率']} "
-            f"コメント={rider.get('コメント', '')}"
+            f"3連対率={rider['3連対率']}"
         )
 
     return result, logs
