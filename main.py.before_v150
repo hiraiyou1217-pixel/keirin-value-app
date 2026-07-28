@@ -9,7 +9,6 @@ import streamlit as st
 
 from odds_browser import fetch_all_trifecta_odds_browser
 from probability_model import (
-    allocate_bet_budget,
     calculate_expected_values,
     extract_rider_numbers,
 )
@@ -26,7 +25,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.5：予算別買い目自動配分版")
+st.caption("Ver.1.4：着順別ライン確率補正版")
 
 
 def make_csv(
@@ -167,7 +166,6 @@ defaults = {
     "automatic_scores": {},
     "lineup_groups": [],
     "lineup_logs": [],
-    "bet_plan": [],
 }
 
 for key, default in defaults.items():
@@ -552,7 +550,6 @@ if odds:
         )
 
         st.session_state.expected_values = results
-        st.session_state.bet_plan = []
 
 
 expected_values = st.session_state.expected_values
@@ -633,216 +630,6 @@ if expected_values:
                 ),
                 "参考購入額": row["参考購入額"],
             }
-        )
-
-    st.divider()
-    st.subheader("予算別・買い目自動配分")
-
-    allocation_col1, allocation_col2 = st.columns(2)
-    allocation_col3, allocation_col4 = st.columns(2)
-
-    with allocation_col1:
-        betting_budget = st.number_input(
-            "今回の購入予算",
-            min_value=100,
-            max_value=10_000_000,
-            value=10_000,
-            step=1_000,
-        )
-
-    with allocation_col2:
-        maximum_bets = st.number_input(
-            "最大買い目数",
-            min_value=1,
-            max_value=50,
-            value=10,
-            step=1,
-        )
-
-    with allocation_col3:
-        maximum_bet_ratio = st.slider(
-            "1点あたり最大予算比率",
-            min_value=0.05,
-            max_value=1.00,
-            value=0.25,
-            step=0.05,
-        )
-
-    with allocation_col4:
-        minimum_unit = st.selectbox(
-            "購入単位",
-            options=[100, 200, 500, 1000],
-            index=0,
-            format_func=lambda value: f"{value:,}円",
-        )
-
-    if st.button(
-        "予算から買い目を自動配分",
-        type="primary",
-    ):
-        st.session_state.bet_plan = (
-            allocate_bet_budget(
-                expected_values,
-                budget=int(betting_budget),
-                minimum_expected_return=(
-                    minimum_expected_return
-                ),
-                maximum_bets=int(maximum_bets),
-                minimum_unit=int(minimum_unit),
-                maximum_bet_ratio=(
-                    maximum_bet_ratio
-                ),
-            )
-        )
-
-    bet_plan = st.session_state.bet_plan
-
-    if bet_plan:
-        total_purchase = sum(
-            int(row["購入額"])
-            for row in bet_plan
-        )
-
-        total_expected_return = sum(
-            float(row["期待払戻"])
-            for row in bet_plan
-        )
-
-        total_expected_profit = sum(
-            float(row["期待利益"])
-            for row in bet_plan
-        )
-
-        summary_col1, summary_col2, summary_col3 = (
-            st.columns(3)
-        )
-
-        with summary_col1:
-            st.metric(
-                "合計購入額",
-                f"{total_purchase:,}円",
-            )
-
-        with summary_col2:
-            st.metric(
-                "期待払戻額",
-                f"{total_expected_return:,.0f}円",
-            )
-
-        with summary_col3:
-            st.metric(
-                "期待利益",
-                f"{total_expected_profit:+,.0f}円",
-            )
-
-        plan_rows = []
-
-        for index, row in enumerate(
-            bet_plan,
-            start=1,
-        ):
-            plan_rows.append(
-                f"""
-                <tr>
-                    <td>{index}</td>
-                    <td>{row['組番']}</td>
-                    <td>{row['人気']}</td>
-                    <td>{row['オッズ']:.1f}</td>
-                    <td>{row['モデル確率'] * 100:.3f}%</td>
-                    <td>{row['期待回収率']:.3f}</td>
-                    <td>{row['購入額']:,}円</td>
-                    <td>{row['的中時払戻']:,}円</td>
-                    <td>{row['期待利益']:+,.0f}円</td>
-                    <td>{row['予算比率'] * 100:.1f}%</td>
-                </tr>
-                """
-            )
-
-        plan_html = f"""
-        <div style="max-height:600px;overflow:auto;border:1px solid #ddd;">
-            <table style="width:100%;border-collapse:collapse;font-size:14px;">
-                <thead>
-                    <tr style="position:sticky;top:0;background:#f5f5f5;">
-                        <th>順位</th>
-                        <th>組番</th>
-                        <th>人気</th>
-                        <th>オッズ</th>
-                        <th>モデル確率</th>
-                        <th>期待回収率</th>
-                        <th>購入額</th>
-                        <th>的中時払戻</th>
-                        <th>期待利益</th>
-                        <th>予算比率</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {''.join(plan_rows)}
-                </tbody>
-            </table>
-        </div>
-        """
-
-        st.markdown(
-            plan_html,
-            unsafe_allow_html=True,
-        )
-
-        bet_export_rows = []
-
-        for row in bet_plan:
-            bet_export_rows.append(
-                {
-                    "組番": row["組番"],
-                    "人気": row["人気"],
-                    "オッズ": row["オッズ"],
-                    "モデル確率": round(
-                        row["モデル確率"],
-                        8,
-                    ),
-                    "期待回収率": round(
-                        row["期待回収率"],
-                        4,
-                    ),
-                    "購入額": row["購入額"],
-                    "的中時払戻": row["的中時払戻"],
-                    "期待払戻": row["期待払戻"],
-                    "期待利益": row["期待利益"],
-                    "予算比率": round(
-                        row["予算比率"],
-                        4,
-                    ),
-                }
-            )
-
-        st.download_button(
-            "買い目プランCSVをダウンロード",
-            data=make_csv(
-                bet_export_rows,
-                [
-                    "組番",
-                    "人気",
-                    "オッズ",
-                    "モデル確率",
-                    "期待回収率",
-                    "購入額",
-                    "的中時払戻",
-                    "期待払戻",
-                    "期待利益",
-                    "予算比率",
-                ],
-            ),
-            file_name=(
-                f"{selected_date:%Y%m%d}_"
-                f"{venue}_{selected_label}_"
-                "bet_plan.csv"
-            ),
-            mime="text/csv",
-        )
-
-    elif st.session_state.bet_plan == []:
-        st.caption(
-            "期待回収率、ケリー基準、最大買い目数、"
-            "1点上限を使って購入額を100円単位で配分します。"
         )
 
     st.download_button(
