@@ -128,12 +128,227 @@ def fractional_kelly_fraction(
     return max(0.0, full_kelly * fraction)
 
 
+
+def build_lineup_positions(
+    lineup_groups: list[list[int]],
+) -> dict[int, tuple[int, int]]:
+    """
+    車番ごとに、所属ラインと位置を返す。
+
+    戻り値:
+    車番 -> (ライン番号, ライン内位置)
+    """
+    positions: dict[int, tuple[int, int]] = {}
+
+    for group_index, group in enumerate(lineup_groups):
+        for position, rider in enumerate(group):
+            positions[int(rider)] = (
+                group_index,
+                position,
+            )
+
+    return positions
+
+
+def lineup_sequence_multiplier(
+    first: int,
+    second: int,
+    third: int,
+    lineup_groups: list[list[int]],
+    line_exact_bonus: float = 1.30,
+    line_pair_bonus: float = 1.12,
+    second_over_leader_bonus: float = 1.15,
+    second_third_bonus: float = 1.08,
+) -> float:
+    """
+    3連単の並びに対するライン補正倍率。
+
+    倍率は確率そのものではなく、全組番の確率を
+    再正規化する前の相対ウェイトとして使用する。
+    """
+    if not lineup_groups:
+        return 1.0
+
+    positions = build_lineup_positions(
+        lineup_groups
+    )
+
+    first_position = positions.get(first)
+    second_position = positions.get(second)
+    third_position = positions.get(third)
+
+    multiplier = 1.0
+
+    # 3車が同じライン
+    if (
+        first_position
+        and second_position
+        and third_position
+        and first_position[0]
+        == second_position[0]
+        == third_position[0]
+    ):
+        first_index = first_position[1]
+        second_index = second_position[1]
+        third_index = third_position[1]
+
+        # ライン順そのまま
+        if (
+            second_index == first_index + 1
+            and third_index == second_index + 1
+        ):
+            multiplier *= line_exact_bonus
+
+        # 番手差し→先行→3番手
+        elif (
+            first_index == 1
+            and second_index == 0
+            and third_index == 2
+        ):
+            multiplier *= (
+                line_exact_bonus
+                * second_over_leader_bonus
+            )
+
+        # 番手→3番手→先行
+        elif (
+            first_index == 1
+            and second_index == 2
+            and third_index == 0
+        ):
+            multiplier *= (
+                line_exact_bonus
+                * second_third_bonus
+            )
+
+    # 1着・2着が同じライン
+    if (
+        first_position
+        and second_position
+        and first_position[0] == second_position[0]
+    ):
+        first_index = first_position[1]
+        second_index = second_position[1]
+
+        # 先頭→番手
+        if (
+            first_index == 0
+            and second_index == 1
+        ):
+            multiplier *= line_pair_bonus
+
+        # 番手→先頭
+        elif (
+            first_index == 1
+            and second_index == 0
+        ):
+            multiplier *= (
+                line_pair_bonus
+                * second_over_leader_bonus
+            )
+
+        # 番手→3番手
+        elif (
+            first_index == 1
+            and second_index == 2
+        ):
+            multiplier *= second_third_bonus
+
+    # 2着・3着が同じライン
+    if (
+        second_position
+        and third_position
+        and second_position[0] == third_position[0]
+    ):
+        if third_position[1] == second_position[1] + 1:
+            multiplier *= second_third_bonus
+
+    return max(0.01, float(multiplier))
+
+
+def calculate_lineup_adjusted_probabilities(
+    odds_rows: list[dict[str, Any]],
+    weights: dict[int, float],
+    lineup_groups: list[list[int]],
+    line_exact_bonus: float = 1.30,
+    line_pair_bonus: float = 1.12,
+    second_over_leader_bonus: float = 1.15,
+    second_third_bonus: float = 1.08,
+) -> dict[str, float]:
+    """
+    Plackett-Luce確率へ着順別ライン補正を掛け、
+    全組番の合計が1になるよう再正規化する。
+    """
+    raw_probabilities: dict[str, float] = {}
+
+    for row in odds_rows:
+        combination = str(
+            row.get("組番", "")
+        )
+        parts = combination.split("-")
+
+        if len(parts) != 3:
+            continue
+
+        try:
+            first, second, third = map(
+                int,
+                parts,
+            )
+        except ValueError:
+            continue
+
+        base_probability = trifecta_probability(
+            first,
+            second,
+            third,
+            weights,
+        )
+
+        multiplier = lineup_sequence_multiplier(
+            first,
+            second,
+            third,
+            lineup_groups,
+            line_exact_bonus=line_exact_bonus,
+            line_pair_bonus=line_pair_bonus,
+            second_over_leader_bonus=(
+                second_over_leader_bonus
+            ),
+            second_third_bonus=second_third_bonus,
+        )
+
+        raw_probabilities[combination] = (
+            base_probability * multiplier
+        )
+
+    total = sum(raw_probabilities.values())
+
+    if total <= 0:
+        return {
+            combination: 0.0
+            for combination in raw_probabilities
+        }
+
+    return {
+        combination: probability / total
+        for combination, probability
+        in raw_probabilities.items()
+    }
+
+
 def calculate_expected_values(
     odds_rows: list[dict[str, Any]],
     scores: dict[int, float],
     temperature: float = 1.0,
     bankroll: int = 10_000,
     kelly_fraction: float = 0.25,
+    lineup_groups: list[list[int]] | None = None,
+    use_sequence_adjustment: bool = True,
+    line_exact_bonus: float = 1.30,
+    line_pair_bonus: float = 1.12,
+    second_over_leader_bonus: float = 1.15,
+    second_third_bonus: float = 1.08,
 ) -> list[dict[str, Any]]:
     weights = score_to_weights(
         scores,
@@ -143,6 +358,29 @@ def calculate_expected_values(
     market_probabilities = (
         calculate_market_probabilities(odds_rows)
     )
+
+    effective_lineup_groups = (
+        lineup_groups or []
+    )
+
+    if use_sequence_adjustment:
+        model_probabilities = (
+            calculate_lineup_adjusted_probabilities(
+                odds_rows,
+                weights,
+                effective_lineup_groups,
+                line_exact_bonus=line_exact_bonus,
+                line_pair_bonus=line_pair_bonus,
+                second_over_leader_bonus=(
+                    second_over_leader_bonus
+                ),
+                second_third_bonus=(
+                    second_third_bonus
+                ),
+            )
+        )
+    else:
+        model_probabilities = {}
 
     results: list[dict[str, Any]] = []
 
@@ -165,12 +403,20 @@ def calculate_expected_values(
         except ValueError:
             continue
 
-        model_probability = trifecta_probability(
-            first,
-            second,
-            third,
-            weights,
-        )
+        if use_sequence_adjustment:
+            model_probability = (
+                model_probabilities.get(
+                    combination,
+                    0.0,
+                )
+            )
+        else:
+            model_probability = trifecta_probability(
+                first,
+                second,
+                third,
+                weights,
+            )
 
         market_probability = market_probabilities.get(
             combination,

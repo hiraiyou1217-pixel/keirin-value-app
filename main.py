@@ -25,7 +25,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.3.1：コメント連携ライン推定版")
+st.caption("Ver.1.4：着順別ライン確率補正版")
 
 
 def make_csv(
@@ -462,6 +462,58 @@ if odds:
             step=1_000,
         )
 
+    st.markdown("#### 着順別ライン確率補正")
+
+    use_sequence_adjustment = st.checkbox(
+        "3連単の着順へライン補正を使用する",
+        value=True,
+        help=(
+            "同ラインの先頭・番手・3番手が"
+            "連続して入着する組番を相対的に加点します。"
+        ),
+    )
+
+    sequence_col1, sequence_col2 = st.columns(2)
+    sequence_col3, sequence_col4 = st.columns(2)
+
+    with sequence_col1:
+        line_exact_bonus = st.number_input(
+            "ライン順完全一致倍率",
+            min_value=0.50,
+            max_value=3.00,
+            value=1.30,
+            step=0.05,
+            help="例：7-4-1ラインで7-4-1決着",
+        )
+
+    with sequence_col2:
+        line_pair_bonus = st.number_input(
+            "先頭・番手連携倍率",
+            min_value=0.50,
+            max_value=2.00,
+            value=1.12,
+            step=0.02,
+        )
+
+    with sequence_col3:
+        second_over_leader_bonus = st.number_input(
+            "番手差し倍率",
+            min_value=0.50,
+            max_value=2.00,
+            value=1.15,
+            step=0.05,
+            help="例：7-4ラインで4-7決着",
+        )
+
+    with sequence_col4:
+        second_third_bonus = st.number_input(
+            "番手・3番手連携倍率",
+            min_value=0.50,
+            max_value=2.00,
+            value=1.08,
+            step=0.02,
+        )
+
     kelly_fraction = st.slider(
         "ケリー基準の使用割合",
         min_value=0.0,
@@ -483,6 +535,18 @@ if odds:
             temperature=temperature,
             bankroll=int(bankroll),
             kelly_fraction=kelly_fraction,
+            lineup_groups=lineup_groups,
+            use_sequence_adjustment=(
+                use_sequence_adjustment
+            ),
+            line_exact_bonus=line_exact_bonus,
+            line_pair_bonus=line_pair_bonus,
+            second_over_leader_bonus=(
+                second_over_leader_bonus
+            ),
+            second_third_bonus=(
+                second_third_bonus
+            ),
         )
 
         st.session_state.expected_values = results
