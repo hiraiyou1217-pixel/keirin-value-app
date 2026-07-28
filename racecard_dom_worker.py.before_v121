@@ -1,0 +1,500 @@
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from playwright.sync_api import sync_playwright
+
+
+def parse_float(value: str) -> float | None:
+    match = re.search(r"\d+(?:\.\d+)?", value.replace(",", ""))
+
+    if not match:
+        return None
+
+    try:
+        return float(match.group())
+    except ValueError:
+        return None
+
+
+def parse_integer(value: str) -> int | None:
+    number = parse_float(value)
+
+    if number is None:
+        return None
+
+    return int(number)
+
+
+def find_value_after_label(
+    lines: list[str],
+    labels: tuple[str, ...],
+) -> str | None:
+    for index, line in enumerate(lines):
+        normalized = line.replace(" ", "")
+
+        if not any(
+            label.replace(" ", "") in normalized
+            for label in labels
+        ):
+            continue
+
+        # 同じ行のラベル後方に値がある場合
+        for label in labels:
+            if label.replace(" ", "") in normalized:
+                remainder = normalized.split(
+                    label.replace(" ", ""),
+                    1,
+                )[-1]
+
+                if remainder:
+                    return remainder
+
+        # 次の数行に値がある場合
+        for following in lines[index + 1:index + 4]:
+            if re.search(r"\d", following):
+                return following
+
+    return None
+
+
+def parse_rider_block(
+    block_text: str,
+) -> dict[str, Any] | None:
+    lines = [
+        line.strip()
+        for line in block_text.splitlines()
+        if line.strip()
+    ]
+
+    if not lines:
+        return None
+
+    rider_number = None
+
+    for line in lines[:8]:
+        if re.fullmatch(r"[1-9]", line):
+            rider_number = int(line)
+            break
+
+        match = re.search(
+            r"(?:車番|枠番)?\s*([1-9])(?:番車)?",
+            line,
+        )
+
+        if match:
+            rider_number = int(match.group(1))
+            break
+
+    if rider_number is None:
+        return None
+
+    # 選手名候補
+    rider_name = ""
+
+    excluded_words = (
+        "競走得点",
+        "脚質",
+        "逃",
+        "両",
+        "追",
+        "勝率",
+        "連対率",
+        "三連対率",
+        "2連対率",
+        "3連対率",
+        "S",
+        "B",
+        "H",
+        "着",
+        "級",
+        "期",
+        "歳",
+    )
+
+    for line in lines[:15]:
+        if re.fullmatch(r"[1-9]", line):
+            continue
+
+        if re.search(r"\d", line):
+            continue
+
+        if any(word == line for word in excluded_words):
+            continue
+
+        if 2 <= len(line) <= 20:
+            rider_name = line
+            break
+
+    score_text = find_value_after_label(
+        lines,
+        ("競走得点", "得点"),
+    )
+
+    style_text = find_value_after_label(
+        lines,
+        ("脚質",),
+    )
+
+    b_text = find_value_after_label(
+        lines,
+        ("B", "バック"),
+    )
+
+    h_text = find_value_after_label(
+        lines,
+        ("H", "ホーム"),
+    )
+
+    s_text = find_value_after_label(
+        lines,
+        ("S", "スタート"),
+    )
+
+    win_rate_text = find_value_after_label(
+        lines,
+        ("勝率",),
+    )
+
+    place2_text = find_value_after_label(
+        lines,
+        ("2連対率", "二連対率"),
+    )
+
+    place3_text = find_value_after_label(
+        lines,
+        ("3連対率", "三連対率"),
+    )
+
+    competition_score = (
+        parse_float(score_text)
+        if score_text
+        else None
+    )
+
+    b_count = (
+        parse_integer(b_text)
+        if b_text
+        else None
+    )
+
+    h_count = (
+        parse_integer(h_text)
+        if h_text
+        else None
+    )
+
+    s_count = (
+        parse_integer(s_text)
+        if s_text
+        else None
+    )
+
+    win_rate = (
+        parse_float(win_rate_text)
+        if win_rate_text
+        else None
+    )
+
+    place2_rate = (
+        parse_float(place2_text)
+        if place2_text
+        else None
+    )
+
+    place3_rate = (
+        parse_float(place3_text)
+        if place3_text
+        else None
+    )
+
+    style = ""
+
+    if style_text:
+        for candidate in ("逃", "両", "追"):
+            if candidate in style_text:
+                style = candidate
+                break
+
+    return {
+        "車番": rider_number,
+        "選手名": rider_name or f"{rider_number}番車",
+        "競走得点": competition_score,
+        "脚質": style,
+        "B": b_count,
+        "H": h_count,
+        "S": s_count,
+        "勝率": win_rate,
+        "2連対率": place2_rate,
+        "3連対率": place3_rate,
+        "元テキスト": block_text[:2000],
+    }
+
+
+def fetch_racecard_data(
+    racecard_url: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    logs = [
+        "出走表取得方式: Google Chrome DOM解析",
+        f"出走表URL: {racecard_url}",
+    ]
+
+    parsed_by_number: dict[int, dict[str, Any]] = {}
+
+    with sync_playwright() as playwright:
+        launch_options = {
+            "headless": True,
+            "args": [
+                "--disable-dev-shm-usage",
+                "--disable-background-networking",
+                "--disable-extensions",
+                "--disable-gpu",
+            ],
+        }
+
+        try:
+            browser = playwright.chromium.launch(
+                channel="chrome",
+                **launch_options,
+            )
+        except Exception:
+            browser = playwright.chromium.launch(
+                executable_path=(
+                    "/Applications/"
+                    "Google Chrome.app/"
+                    "Contents/MacOS/"
+                    "Google Chrome"
+                ),
+                **launch_options,
+            )
+
+        context = browser.new_context(
+            viewport={
+                "width": 1440,
+                "height": 1200,
+            },
+            user_agent=(
+                "Mozilla/5.0 "
+                "(Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 "
+                "Chrome/126 Safari/537.36"
+            ),
+        )
+
+        page = context.new_page()
+
+        page.goto(
+            racecard_url,
+            wait_until="domcontentloaded",
+            timeout=60_000,
+        )
+
+        page.wait_for_timeout(2500)
+
+        logs.append(
+            f"ページタイトル: {page.title()}"
+        )
+
+        # 競走得点を含む要素から、選手1名分と思われる祖先を取得
+        blocks = page.locator(
+            "text=競走得点"
+        ).evaluate_all(
+            """
+            elements => {
+                const results = [];
+
+                for (const element of elements) {
+                    let current = element;
+
+                    for (
+                        let depth = 0;
+                        depth < 10 && current;
+                        depth += 1
+                    ) {
+                        const text = (
+                            current.innerText ||
+                            current.textContent ||
+                            ""
+                        ).trim();
+
+                        const lineCount = text
+                            .split(String.fromCharCode(10))
+                            .filter(
+                                line => line.trim().length > 0
+                            )
+                            .length;
+
+                        if (
+                            text.includes("競走得点") &&
+                            lineCount >= 8 &&
+                            lineCount <= 100
+                        ) {
+                            results.push(text);
+                            break;
+                        }
+
+                        current = current.parentElement;
+                    }
+                }
+
+                return [...new Set(results)];
+            }
+            """
+        )
+
+        logs.append(
+            f"競走得点ブロック候補: {len(blocks)}件"
+        )
+
+        for block_text in blocks:
+            parsed = parse_rider_block(block_text)
+
+            if parsed is None:
+                continue
+
+            rider_number = int(parsed["車番"])
+
+            existing = parsed_by_number.get(rider_number)
+
+            # より多くの項目が取れた候補を優先
+            parsed_count = sum(
+                value not in (None, "", f"{rider_number}番車")
+                for key, value in parsed.items()
+                if key != "元テキスト"
+            )
+
+            existing_count = -1
+
+            if existing:
+                existing_count = sum(
+                    value not in (
+                        None,
+                        "",
+                        f"{rider_number}番車",
+                    )
+                    for key, value in existing.items()
+                    if key != "元テキスト"
+                )
+
+            if parsed_count > existing_count:
+                parsed_by_number[rider_number] = parsed
+
+        # 詳細ブロックが取れない場合、車番と選手名だけ取得
+        if not parsed_by_number:
+            body_lines = [
+                line.strip()
+                for line in page.locator(
+                    "body"
+                ).inner_text().splitlines()
+                if line.strip()
+            ]
+
+            for index, line in enumerate(body_lines):
+                if not re.fullmatch(r"[1-9]", line):
+                    continue
+
+                for candidate in body_lines[
+                    index + 1:index + 5
+                ]:
+                    if re.search(r"\d", candidate):
+                        continue
+
+                    if 2 <= len(candidate) <= 20:
+                        rider_number = int(line)
+
+                        parsed_by_number[rider_number] = {
+                            "車番": rider_number,
+                            "選手名": candidate,
+                            "競走得点": None,
+                            "脚質": "",
+                            "B": None,
+                            "H": None,
+                            "S": None,
+                            "勝率": None,
+                            "2連対率": None,
+                            "3連対率": None,
+                            "元テキスト": "",
+                        }
+                        break
+
+        context.close()
+        browser.close()
+
+    riders = [
+        parsed_by_number[number]
+        for number in sorted(parsed_by_number)
+    ]
+
+    logs.append(
+        f"選手データ取得件数: {len(riders)}件"
+    )
+
+    for rider in riders:
+        logs.append(
+            f"{rider['車番']}番 "
+            f"{rider['選手名']} "
+            f"競走得点={rider['競走得点']} "
+            f"脚質={rider['脚質']} "
+            f"B={rider['B']} "
+            f"H={rider['H']} "
+            f"S={rider['S']}"
+        )
+
+    return riders, logs
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--racecard-url",
+        required=True,
+    )
+
+    parser.add_argument(
+        "--output",
+        required=True,
+    )
+
+    arguments = parser.parse_args()
+    output_path = Path(arguments.output)
+
+    try:
+        riders, logs = fetch_racecard_data(
+            arguments.racecard_url
+        )
+
+        payload = {
+            "success": True,
+            "riders": riders,
+            "logs": logs,
+        }
+
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "riders": [],
+            "logs": [
+                "出走表Workerでエラーが発生しました。",
+                f"{type(exc).__name__}: {exc}",
+            ],
+        }
+
+    output_path.write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

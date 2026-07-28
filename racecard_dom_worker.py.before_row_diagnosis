@@ -1,0 +1,484 @@
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from playwright.sync_api import sync_playwright
+
+
+def parse_float(value: Any) -> float | None:
+    if value is None:
+        return None
+
+    text = str(value).replace(",", "").strip()
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+
+    if not match:
+        return None
+
+    try:
+        return float(match.group())
+    except ValueError:
+        return None
+
+
+def parse_integer(value: Any) -> int | None:
+    number = parse_float(value)
+
+    if number is None:
+        return None
+
+    return int(number)
+
+
+def clean_name(value: str) -> str:
+    """
+    「小林弘和 佐賀 S2 42歳 91期」のような文字列から
+    選手名部分を優先して取得する。
+    """
+    text = " ".join(str(value).split())
+
+    match = re.match(
+        r"^([^\s]+?)(?:\s+(?:北海道|青森|岩手|宮城|秋田|山形|福島|"
+        r"茨城|栃木|群馬|埼玉|千葉|東京|神奈川|新潟|富山|石川|福井|"
+        r"山梨|長野|岐阜|静岡|愛知|三重|滋賀|京都|大阪|兵庫|奈良|"
+        r"和歌山|鳥取|島根|岡山|広島|山口|徳島|香川|愛媛|高知|"
+        r"福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄)\b)",
+        text,
+    )
+
+    if match:
+        return match.group(1)
+
+    return text.split()[0] if text else ""
+
+
+def normalize_header(value: str) -> str:
+    return (
+        str(value)
+        .replace("\n", "")
+        .replace(" ", "")
+        .replace("　", "")
+        .replace("２", "2")
+        .replace("３", "3")
+        .replace("二", "2")
+        .replace("三", "3")
+        .strip()
+    )
+
+
+def find_column(
+    headers: list[str],
+    candidates: tuple[str, ...],
+) -> int | None:
+    normalized_headers = [
+        normalize_header(header)
+        for header in headers
+    ]
+
+    for candidate in candidates:
+        normalized_candidate = normalize_header(candidate)
+
+        for index, header in enumerate(normalized_headers):
+            if (
+                header == normalized_candidate
+                or normalized_candidate in header
+            ):
+                return index
+
+    return None
+
+
+def cell_value(
+    cells: list[str],
+    index: int | None,
+) -> str:
+    if index is None:
+        return ""
+
+    if index < 0 or index >= len(cells):
+        return ""
+
+    return str(cells[index]).strip()
+
+
+def fetch_racecard_data(
+    racecard_url: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    logs = [
+        "出走表取得方式: Google Chrome 表形式DOM解析",
+        f"出走表URL: {racecard_url}",
+    ]
+
+    riders: list[dict[str, Any]] = []
+
+    with sync_playwright() as playwright:
+        launch_options = {
+            "headless": True,
+            "args": [
+                "--disable-dev-shm-usage",
+                "--disable-background-networking",
+                "--disable-extensions",
+                "--disable-gpu",
+            ],
+        }
+
+        try:
+            browser = playwright.chromium.launch(
+                channel="chrome",
+                **launch_options,
+            )
+            logs.append("ブラウザ: システムのGoogle Chrome")
+
+        except Exception:
+            browser = playwright.chromium.launch(
+                executable_path=(
+                    "/Applications/"
+                    "Google Chrome.app/"
+                    "Contents/MacOS/"
+                    "Google Chrome"
+                ),
+                **launch_options,
+            )
+            logs.append("ブラウザ: Google Chrome実行ファイル")
+
+        context = browser.new_context(
+            viewport={
+                "width": 1600,
+                "height": 1200,
+            },
+            user_agent=(
+                "Mozilla/5.0 "
+                "(Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 "
+                "Chrome/126 Safari/537.36"
+            ),
+        )
+
+        page = context.new_page()
+
+        page.goto(
+            racecard_url,
+            wait_until="domcontentloaded",
+            timeout=60_000,
+        )
+
+        page.wait_for_timeout(2500)
+
+        logs.append(f"ページタイトル: {page.title()}")
+
+        tables = page.locator("table").evaluate_all(
+            """
+            tables => tables.map((table, tableIndex) => {
+                const rows = [...table.querySelectorAll("tr")];
+
+                return {
+                    tableIndex,
+                    text: (table.innerText || "").trim(),
+                    rows: rows.map(row => ({
+                        headers: [...row.querySelectorAll("th")]
+                            .map(cell => (cell.innerText || cell.textContent || "").trim()),
+                        cells: [...row.querySelectorAll("td")]
+                            .map(cell => (cell.innerText || cell.textContent || "").trim())
+                    }))
+                };
+            })
+            """
+        )
+
+        logs.append(f"検出table数: {len(tables)}件")
+
+        target_table = None
+
+        for table in tables:
+            table_text = str(table.get("text", ""))
+
+            if (
+                "競走得点" in table_text
+                and "選手名" in table_text
+                and ("脚" in table_text or "脚質" in table_text)
+            ):
+                target_table = table
+                break
+
+        if target_table is None:
+            logs.append(
+                "エラー: 競走得点を含む選手表を検出できませんでした。"
+            )
+
+            context.close()
+            browser.close()
+            return [], logs
+
+        rows = target_table.get("rows", [])
+        logs.append(
+            f"対象table index: {target_table.get('tableIndex')}"
+        )
+        logs.append(f"対象table行数: {len(rows)}件")
+
+        headers: list[str] = []
+
+        for row in rows:
+            row_headers = row.get("headers", [])
+
+            if row_headers and "競走得点" in "".join(row_headers):
+                headers = row_headers
+                break
+
+        if not headers:
+            # WINTICKET側でtheadがtd化された場合の予備
+            for row in rows:
+                candidate_cells = row.get("cells", [])
+
+                if (
+                    candidate_cells
+                    and "競走得点" in "".join(candidate_cells)
+                ):
+                    headers = candidate_cells
+                    break
+
+        logs.append(
+            "検出ヘッダー: "
+            + " | ".join(headers)
+        )
+
+        car_index = find_column(
+            headers,
+            ("車", "車番"),
+        )
+        name_index = find_column(
+            headers,
+            ("選手名",),
+        )
+        score_index = find_column(
+            headers,
+            ("競走得点",),
+        )
+        s_index = find_column(
+            headers,
+            ("S",),
+        )
+        h_index = find_column(
+            headers,
+            ("H",),
+        )
+        b_index = find_column(
+            headers,
+            ("B",),
+        )
+        style_index = find_column(
+            headers,
+            ("脚", "脚質"),
+        )
+        win_rate_index = find_column(
+            headers,
+            ("勝率",),
+        )
+        place2_index = find_column(
+            headers,
+            ("2連対率",),
+        )
+        place3_index = find_column(
+            headers,
+            ("3連対率",),
+        )
+
+        logs.append(
+            "列位置: "
+            f"車={car_index} "
+            f"選手名={name_index} "
+            f"競走得点={score_index} "
+            f"S={s_index} "
+            f"H={h_index} "
+            f"B={b_index} "
+            f"脚={style_index} "
+            f"勝率={win_rate_index} "
+            f"2連対率={place2_index} "
+            f"3連対率={place3_index}"
+        )
+
+        data_row_number = 0
+
+        for row_index, row in enumerate(rows):
+            cells = row.get("cells", [])
+
+            if not cells:
+                continue
+
+            competition_score = parse_float(
+                cell_value(cells, score_index)
+            )
+
+            # 競走得点がない行は見出し等と判断
+            if competition_score is None:
+                continue
+
+            data_row_number += 1
+
+            car_text = cell_value(
+                cells,
+                car_index,
+            )
+
+            car_match = re.search(
+                r"(?<!\d)([1-9])(?!\d)",
+                car_text,
+            )
+
+            if car_match:
+                car_number = int(car_match.group(1))
+            elif 1 <= data_row_number <= 9:
+                # 車番セルのDOM構造が他行と違う場合は、
+                # 選手表の上からの行順を予備車番にする。
+                car_number = data_row_number
+
+                logs.append(
+                    f"車番補完: table行={row_index} "
+                    f"行順={data_row_number} "
+                    f"車番セル={car_text!r} "
+                    f"→ {car_number}番車"
+                )
+            else:
+                logs.append(
+                    f"車番解析失敗: table行={row_index} "
+                    f"車番セル={car_text!r}"
+                )
+                continue
+
+            name_text = cell_value(
+                cells,
+                name_index,
+            )
+
+            style = cell_value(
+                cells,
+                style_index,
+            )
+
+            for candidate in ("逃", "両", "追"):
+                if candidate in style:
+                    style = candidate
+                    break
+            else:
+                style = ""
+
+            rider = {
+                "車番": car_number,
+                "選手名": clean_name(name_text)
+                or f"{car_number}番車",
+                "競走得点": competition_score,
+                "脚質": style,
+                "S": parse_integer(
+                    cell_value(cells, s_index)
+                ),
+                "H": parse_integer(
+                    cell_value(cells, h_index)
+                ),
+                "B": parse_integer(
+                    cell_value(cells, b_index)
+                ),
+                "勝率": parse_float(
+                    cell_value(cells, win_rate_index)
+                ),
+                "2連対率": parse_float(
+                    cell_value(cells, place2_index)
+                ),
+                "3連対率": parse_float(
+                    cell_value(cells, place3_index)
+                ),
+            }
+
+            riders.append(rider)
+
+        context.close()
+        browser.close()
+
+    # 同じ車番が複数取れた場合は先頭を採用
+    riders_by_number: dict[int, dict[str, Any]] = {}
+
+    for rider in riders:
+        number = int(rider["車番"])
+
+        if number not in riders_by_number:
+            riders_by_number[number] = rider
+
+    result = [
+        riders_by_number[number]
+        for number in sorted(riders_by_number)
+    ]
+
+    logs.append(
+        f"選手データ取得件数: {len(result)}件"
+    )
+
+    for rider in result:
+        logs.append(
+            f"{rider['車番']}番 "
+            f"{rider['選手名']} "
+            f"競走得点={rider['競走得点']} "
+            f"脚質={rider['脚質']} "
+            f"B={rider['B']} "
+            f"H={rider['H']} "
+            f"S={rider['S']} "
+            f"勝率={rider['勝率']} "
+            f"2連対率={rider['2連対率']} "
+            f"3連対率={rider['3連対率']}"
+        )
+
+    return result, logs
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--racecard-url",
+        required=True,
+    )
+
+    parser.add_argument(
+        "--output",
+        required=True,
+    )
+
+    arguments = parser.parse_args()
+    output_path = Path(arguments.output)
+
+    try:
+        riders, logs = fetch_racecard_data(
+            arguments.racecard_url
+        )
+
+        payload = {
+            "success": True,
+            "riders": riders,
+            "logs": logs,
+        }
+
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "riders": [],
+            "logs": [
+                "出走表Workerでエラーが発生しました。",
+                f"{type(exc).__name__}: {exc}",
+            ],
+        }
+
+    output_path.write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

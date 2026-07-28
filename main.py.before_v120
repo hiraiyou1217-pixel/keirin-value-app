@@ -12,8 +12,6 @@ from probability_model import (
     calculate_expected_values,
     extract_rider_numbers,
 )
-from racecard_browser import fetch_racecard_data_browser
-from auto_score import build_automatic_scores
 from race_catalog import fetch_race_catalog
 
 
@@ -23,7 +21,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.2.3：省略枠セル対応版")
+st.caption("Ver.1.1.2：全オッズ自動補正版")
 
 
 def make_csv(
@@ -159,9 +157,6 @@ defaults = {
     "odds": [],
     "odds_logs": [],
     "expected_values": [],
-    "rider_data": [],
-    "rider_logs": [],
-    "automatic_scores": {},
 }
 
 for key, default in defaults.items():
@@ -191,9 +186,6 @@ if st.button(
         st.session_state.odds = []
         st.session_state.odds_logs = []
         st.session_state.expected_values = []
-        st.session_state.rider_data = []
-        st.session_state.rider_logs = []
-        st.session_state.automatic_scores = {}
 
     except Exception as exc:
         st.session_state.catalog = {}
@@ -255,20 +247,6 @@ if catalog:
             st.session_state.odds_logs = logs
             st.session_state.expected_values = []
 
-            rider_data, rider_logs = (
-                fetch_racecard_data_browser(
-                    selected_race["url"]
-                )
-            )
-
-            st.session_state.rider_data = rider_data
-            st.session_state.rider_logs = rider_logs
-            st.session_state.automatic_scores = (
-                build_automatic_scores(
-                    rider_data
-                )
-            )
-
         except Exception as exc:
             st.session_state.odds = []
             st.session_state.odds_logs = [
@@ -321,62 +299,14 @@ if odds:
 
     for index, rider in enumerate(riders):
         with score_columns[index % len(score_columns)]:
-            rider_information = next(
-                (
-                    item
-                    for item in st.session_state.rider_data
-                    if int(item.get("車番", 0)) == rider
-                ),
-                {},
-            )
-
-            rider_name = rider_information.get(
-                "選手名",
-                "",
-            )
-
-            automatic_value = float(
-                st.session_state.automatic_scores.get(
-                    rider,
-                    50.0,
-                )
-            )
-
-            label = (
-                f"{rider}番車 {rider_name}"
-                if rider_name
-                else f"{rider}番車"
-            )
-
             scores[rider] = st.number_input(
-                label,
+                f"{rider}番車",
                 min_value=0.0,
                 max_value=100.0,
-                value=automatic_value,
-                step=0.5,
+                value=50.0,
+                step=1.0,
                 key=f"score_{rider}",
             )
-
-            details = []
-
-            for key in (
-                "競走得点",
-                "脚質",
-                "B",
-                "H",
-                "S",
-            ):
-                value = rider_information.get(key)
-
-                if value not in (None, ""):
-                    details.append(
-                        f"{key}:{value}"
-                    )
-
-            if details:
-                st.caption(
-                    " / ".join(details)
-                )
 
     settings_left, settings_middle, settings_right = (
         st.columns(3)
@@ -564,7 +494,6 @@ with st.expander("取得ログ・自己診断"):
     logs = (
         st.session_state.catalog_logs
         + st.session_state.odds_logs
-        + st.session_state.rider_logs
     )
 
     st.code(
