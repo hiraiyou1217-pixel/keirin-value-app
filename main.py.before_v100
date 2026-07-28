@@ -7,7 +7,7 @@ from io import StringIO
 
 import streamlit as st
 
-from odds_browser import fetch_all_trifecta_odds_browser
+from odds_all import fetch_all_trifecta_odds
 from race_catalog import fetch_race_catalog
 
 
@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.0：全3連単オッズDOM取得版")
+st.caption("Ver.0.3.6：3連単オッズ全範囲取得")
 
 
 def make_csv(rows: list[dict]) -> bytes:
@@ -159,7 +159,9 @@ if catalog:
             with st.spinner(
                 "ブラウザを起動せず、オッズを取得しています"
             ):
-                odds, logs = fetch_all_trifecta_odds_browser(selected_race["url"])
+                odds, logs = fetch_all_trifecta_odds(
+                    selected_race["url"]
+                )
 
             # Streamlitへ渡す前に標準型へ統一
             safe_rows = []

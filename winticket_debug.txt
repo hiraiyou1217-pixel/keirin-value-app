@@ -1,0 +1,54 @@
+受信サイズ: 880,564 bytes
+scriptタグ数: 42
+文字列 "51 〜 100": 1件
+文字列 "201 〜 210": 1件
+文字列 "7.8": 17件
+
+配列型: 0件
+
+文字列型: 0件
+
+oddsキー: 1件
+---
+"maxOdds":0,"oddsStr":"484.0","minOddsStr":"0.0","maxOddsStr":"0.0","popularityOrder":39,"unitPrice":100,"payoffUnitPrice":0,"absent":false},{"id":"126120260728:4:6.7","raceId":"126120260728","type":4,"key":[6,7],"odds":82.6,"minOdds":0,"maxOdds":0,"oddsStr":"82.6","minOddsStr":"0.0","maxOddsStr":"0.0","popularityOrder":19,"unitPrice":100,"payoffUnitPrice":0,"absent":false},{"id":"126120260728:4:7.1","raceId":"126120260728","type":4,"key":[7,1],"odds":70.5,"minOdds":0,"maxOdds":0,"oddsStr":"70.5","minOddsStr":"0.0","maxOddsStr":"0.0","popularityOrder":18,"unitPrice":100,"payoffUnitPrice":0,"absent":false},{"id":"126120260728:4:7.2","raceId":"126120260728","type":4,"key":[7,2],"odds":7.8,"minOdds":0,"maxOdds":0,"oddsStr":"7.8","minOddsStr":"0.0","maxOddsStr":"0.0","popularityOrder":3,"unitPrice":100,"payoffUnitPrice":0,"absent":false},{"id":"126120260728:4:7.3","raceId":"126120260728","type":4,"key":[7,3],"odds":8.8,"minOdds":0,"maxOdds":0,"oddsStr":"8.8","minOddsStr":"0.0","maxOddsStr":"0.0","popularityOrder":4,"unitPrice":100,"payoffUnitPrice":0,"absent":false},{"id":"126120260728:4:7.4","raceId":"126120260728","type":4,"key":[7,4],"odds":2.9,"minOdds":0,"maxOdds":
+
+外部JavaScript数: 36
+/assets/37af68/runtime.fe886e6bb06d2f6f.min.js
+/assets/37af68/framework.34c89d7cf52973ff.min.js
+/assets/37af68/lib-a4e07dc1.07459eab1da99cbf.min.js
+/assets/37af68/lib-7cc2b9a6.0bc9f977fe523ede.min.js
+/assets/37af68/vendors.72460f2e43f39bd5.min.js
+/assets/37af68/bootstrap.bb76afedd4996fa2.min.js
+/assets/37af68/chunk.72b9a5510113e148.min.js
+/assets/37af68/chunk.3d291390f1f511ec.min.js
+/assets/37af68/chunk.6293dbfa78e431fb.min.js
+/assets/37af68/chunk.71b55c8820c62058.min.js
+/assets/37af68/chunk.5f9bdb010874c46c.min.js
+/assets/37af68/chunk.a3906be5dd479cd7.min.js
+/assets/37af68/chunk.1bc15ea1a6894e00.min.js
+/assets/37af68/chunk.0b7abaf048472487.min.js
+/assets/37af68/chunk.760a916c1f7bef82.min.js
+/assets/37af68/chunk.1d9231df2e2e5b00.min.js
+/assets/37af68/chunk.a5522c9bd368aa81.min.js
+/assets/37af68/chunk.d25b58f184f8955a.min.js
+/assets/37af68/chunk.b1d8cffee34e3672.min.js
+/assets/37af68/chunk.af5a4631312b7fc7.min.js
+/assets/37af68/chunk.bab11a9be778a361.min.js
+/assets/37af68/chunk.895b7045a1ed35fb.min.js
+/assets/37af68/chunk.1e1211ff8182217e.min.js
+/assets/37af68/chunk.f5aa06ddc4003ae4.min.js
+/assets/37af68/chunk.99f14539f77f53e5.min.js
+/assets/37af68/chunk.a1beba7ff1a49a01.min.js
+/assets/37af68/chunk.a208fcc16227a201.min.js
+/assets/37af68/chunk.e767a6fcf7ec7b42.min.js
+/assets/37af68/chunk.1ad942769d1b2860.min.js
+/assets/37af68/chunk.67270ccc3691345c.min.js
+/assets/37af68/chunk.0b8cda092c931346.min.js
+/assets/37af68/chunk.cdb372e90471d931.min.js
+/assets/37af68/chunk.4ec61434220fe6ee.min.js
+/assets/37af68/chunk.d911f36f32571c38.min.js
+/assets/37af68/chunk.2d0a280ceaaab2ad.min.js
+/assets/37af68/chunk.e23b774d95d29e82.min.js
+
+診断HTML保存先:
+/Users/yuichirohirai/Documents/GitHub/keirin-value-app/winticket_debug.html
