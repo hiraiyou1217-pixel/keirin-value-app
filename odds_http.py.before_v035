@@ -214,10 +214,10 @@ def extract_from_visible_text(
     html: str,
 ) -> list[dict[str, Any]]:
     """
-    WINTICKETの人気順オッズを、表示範囲内の数値列から解析する。
+    WINTICKET人気順表示を解析する。
 
-    対象データ:
-    人気順位 → 1着 → 2着 → 3着 → オッズ
+    HTML上では各買い目が以下の5要素で並ぶ。
+    人気順位 → 1着車番 → 2着車番 → 3着車番 → オッズ
     """
     parser = TextExtractor()
     parser.feed(html)
@@ -228,95 +228,72 @@ def extract_from_visible_text(
         if item.strip()
     ]
 
-    # 人気順1〜50の開始地点を探す
-    start_index = 0
+    rows: dict[str, dict[str, Any]] = {}
 
-    for index, line in enumerate(lines):
-        normalized = (
-            line.replace(" ", "")
-            .replace("〜", "-")
-            .replace("～", "-")
-            .replace("~", "-")
-        )
+    for index in range(len(lines) - 4):
+        rank_text = lines[index]
+        first_text = lines[index + 1]
+        second_text = lines[index + 2]
+        third_text = lines[index + 3]
+        odds_text = lines[index + 4]
 
-        if normalized == "1-50":
-            start_index = index + 1
-            break
+        if not re.fullmatch(r"\d{1,3}", rank_text):
+            continue
 
-    # 投票受付など、オッズ一覧終了地点を探す
-    end_index = len(lines)
-
-    for index in range(start_index, len(lines)):
-        line = lines[index]
-
-        if (
-            "投票受付" in line
-            or "オッズ一覧" in line
-            or "選択中" in line
+        if not all(
+            re.fullmatch(r"[1-9]", value)
+            for value in (
+                first_text,
+                second_text,
+                third_text,
+            )
         ):
-            end_index = index
-            break
+            continue
 
-    section = lines[start_index:end_index]
+        if len(
+            {
+                first_text,
+                second_text,
+                third_text,
+            }
+        ) != 3:
+            continue
 
-    # 数値だけを取り出す
-    numeric_tokens: list[str] = []
-
-    for line in section:
-        cleaned = (
-            line.replace(",", "")
+        cleaned_odds = (
+            odds_text
+            .replace(",", "")
             .replace("倍", "")
             .strip()
         )
 
-        if re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
-            numeric_tokens.append(cleaned)
-
-    rows: dict[str, dict[str, Any]] = {}
-
-    index = 0
-
-    while index <= len(numeric_tokens) - 5:
-        rank_text = numeric_tokens[index]
-        first_text = numeric_tokens[index + 1]
-        second_text = numeric_tokens[index + 2]
-        third_text = numeric_tokens[index + 3]
-        odds_text = numeric_tokens[index + 4]
-
-        valid = (
-            re.fullmatch(r"\d{1,3}", rank_text)
-            and re.fullmatch(r"[1-9]", first_text)
-            and re.fullmatch(r"[1-9]", second_text)
-            and re.fullmatch(r"[1-9]", third_text)
-            and len({first_text, second_text, third_text}) == 3
-            and re.fullmatch(r"\d+(?:\.\d+)?", odds_text)
-        )
-
-        if not valid:
-            index += 1
+        if not NUMBER_RE.fullmatch(cleaned_odds):
             continue
 
         rank = int(rank_text)
-        odds = float(odds_text)
+        odds = float(cleaned_odds)
 
         if not 1 <= rank <= 504:
-            index += 1
             continue
 
         if not 1.0 < odds < 1_000_000:
-            index += 1
             continue
 
-        combo = f"{first_text}-{second_text}-{third_text}"
+        combo = (
+            f"{first_text}-"
+            f"{second_text}-"
+            f"{third_text}"
+        )
 
-        rows[combo] = {
+        existing = rows.get(combo)
+
+        row = {
             "組番": combo,
             "オッズ": odds,
             "人気": rank,
         }
 
-        # 正しい1組を取得したら5つ先へ進む
-        index += 5
+        if existing is None or rank < existing["人気"]:
+            rows[combo] = row
 
     return sorted(
         rows.values(),
