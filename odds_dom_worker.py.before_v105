@@ -51,10 +51,25 @@ def parse_range_label(
     return start, end
 
 
-def _extract_numeric_tokens(
+def parse_range_text(
     body_text: str,
     range_label: str,
-) -> list[str]:
+) -> list[dict[str, Any]]:
+    """
+    表示中の人気順オッズを、画面上の並び順で解析する。
+
+    人気順位の数字自体は解析しない。
+    3つの異なる車番＋オッズを上から抽出し、
+    表示範囲の開始順位から順番に人気順位を割り当てる。
+    """
+    parsed_range = parse_range_label(range_label)
+
+    if parsed_range is None:
+        return []
+
+    start_rank, end_rank = parsed_range
+    expected_count = end_rank - start_rank + 1
+
     lines = [
         line.strip()
         for line in body_text.splitlines()
@@ -69,7 +84,7 @@ def _extract_numeric_tokens(
             section_start = index + 1
             break
 
-    tokens: list[str] = []
+    numeric_tokens: list[str] = []
 
     for line in lines[section_start:]:
         cleaned = (
@@ -80,107 +95,44 @@ def _extract_numeric_tokens(
         )
 
         if re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
-            tokens.append(cleaned)
+            numeric_tokens.append(cleaned)
 
-    return tokens
+    combinations: list[tuple[str, float]] = []
+    seen_combinations: set[str] = set()
 
-
-def _parse_fixed_five(
-    tokens: list[str],
-    start_rank: int,
-    end_rank: int,
-) -> list[dict[str, Any]]:
-    """
-    人気順位・1着・2着・3着・オッズの
-    5項目単位で解析する方式。
-    """
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
     index = 0
 
-    while index <= len(tokens) - 5:
-        rank_text = tokens[index]
-        first = tokens[index + 1]
-        second = tokens[index + 2]
-        third = tokens[index + 3]
-        odds_text = tokens[index + 4]
+    while index <= len(numeric_tokens) - 4:
+        first = numeric_tokens[index]
+        second = numeric_tokens[index + 1]
+        third = numeric_tokens[index + 2]
+        odds_text = numeric_tokens[index + 3]
 
-        valid = (
-            re.fullmatch(r"\d{1,3}", rank_text)
-            and re.fullmatch(r"[1-9]", first)
-            and re.fullmatch(r"[1-9]", second)
-            and re.fullmatch(r"[1-9]", third)
-            and len({first, second, third}) == 3
-            and re.fullmatch(r"\d+(?:\.\d+)?", odds_text)
+        valid_cars = all(
+            re.fullmatch(r"[1-9]", value)
+            for value in (first, second, third)
         )
 
-        if not valid:
-            index += 1
-            continue
-
-        rank = int(rank_text)
-        odds = float(odds_text)
-        combination = f"{first}-{second}-{third}"
+        valid_odds = bool(
+            re.fullmatch(r"\d+(?:\.\d+)?", odds_text)
+        )
 
         if (
-            start_rank <= rank <= end_rank
-            and 1.0 < odds < 1_000_000
-            and combination not in seen
-        ):
-            rows.append(
-                {
-                    "組番": combination,
-                    "オッズ": odds,
-                    "人気": rank,
-                }
-            )
-            seen.add(combination)
-            index += 5
-            continue
-
-        index += 1
-
-    return rows
-
-
-def _parse_display_order(
-    tokens: list[str],
-    start_rank: int,
-    end_rank: int,
-) -> list[dict[str, Any]]:
-    """
-    3車番＋オッズを上から抽出し、
-    表示順で人気順位を付与する方式。
-    """
-    expected_count = end_rank - start_rank + 1
-    combinations: list[tuple[str, float]] = []
-    seen: set[str] = set()
-    index = 0
-
-    while index <= len(tokens) - 4:
-        first = tokens[index]
-        second = tokens[index + 1]
-        third = tokens[index + 2]
-        odds_text = tokens[index + 3]
-
-        valid = (
-            re.fullmatch(r"[1-9]", first)
-            and re.fullmatch(r"[1-9]", second)
-            and re.fullmatch(r"[1-9]", third)
+            valid_cars
             and len({first, second, third}) == 3
-            and re.fullmatch(r"\d+(?:\.\d+)?", odds_text)
-        )
-
-        if valid:
+            and valid_odds
+        ):
             odds = float(odds_text)
             combination = f"{first}-{second}-{third}"
 
             if (
                 1.0 < odds < 1_000_000
-                and combination not in seen
+                and combination not in seen_combinations
             ):
                 combinations.append((combination, odds))
-                seen.add(combination)
+                seen_combinations.add(combination)
+
+                # 1組を取得したため、その4要素分を進める
                 index += 4
 
                 if len(combinations) >= expected_count:
@@ -190,105 +142,20 @@ def _parse_display_order(
 
         index += 1
 
-    return [
-        {
-            "組番": combination,
-            "オッズ": odds,
-            "人気": start_rank + offset,
-        }
-        for offset, (combination, odds)
-        in enumerate(combinations[:expected_count])
-    ]
+    rows: list[dict[str, Any]] = []
 
-
-def parse_range_text(
-    body_text: str,
-    range_label: str,
-) -> list[dict[str, Any]]:
-    """
-    2種類の解析方式を統合する。
-
-    1. 人気順位を含む固定5項目方式
-    2. 画面表示順方式
-
-    固定5項目方式を優先し、足りない順位を
-    表示順方式の未使用組番で補完する。
-    """
-    parsed_range = parse_range_label(range_label)
-
-    if parsed_range is None:
-        return []
-
-    start_rank, end_rank = parsed_range
-    expected_ranks = list(range(start_rank, end_rank + 1))
-
-    tokens = _extract_numeric_tokens(
-        body_text,
-        range_label,
-    )
-
-    fixed_rows = _parse_fixed_five(
-        tokens,
-        start_rank,
-        end_rank,
-    )
-
-    ordered_rows = _parse_display_order(
-        tokens,
-        start_rank,
-        end_rank,
-    )
-
-    rows_by_rank: dict[int, dict[str, Any]] = {}
-    used_combinations: set[str] = set()
-
-    # 正しい人気順位を直接取得できた固定方式を優先
-    for row in fixed_rows:
-        rank = int(row["人気"])
-        combination = str(row["組番"])
-
-        if (
-            rank not in rows_by_rank
-            and combination not in used_combinations
-        ):
-            rows_by_rank[rank] = row
-            used_combinations.add(combination)
-
-    # 固定方式で欠けた順位を表示順方式で補完
-    ordered_candidates = [
-        row
-        for row in ordered_rows
-        if row["組番"] not in used_combinations
-    ]
-
-    candidate_index = 0
-
-    for rank in expected_ranks:
-        if rank in rows_by_rank:
-            continue
-
-        while candidate_index < len(ordered_candidates):
-            candidate = ordered_candidates[candidate_index]
-            candidate_index += 1
-
-            combination = str(candidate["組番"])
-
-            if combination in used_combinations:
-                continue
-
-            rows_by_rank[rank] = {
+    for offset, (combination, odds) in enumerate(
+        combinations[:expected_count]
+    ):
+        rows.append(
+            {
                 "組番": combination,
-                "オッズ": float(candidate["オッズ"]),
-                "人気": rank,
+                "オッズ": odds,
+                "人気": start_rank + offset,
             }
-            used_combinations.add(combination)
-            break
+        )
 
-    return [
-        rows_by_rank[rank]
-        for rank in expected_ranks
-        if rank in rows_by_rank
-    ]
+    return rows
 
 
 def find_range_select(page) -> tuple[int, list[dict[str, Any]]]:
@@ -456,66 +323,12 @@ def fetch_all_odds(
 
                 page.wait_for_timeout(700)
 
-                # ページ全体ではなく、範囲selectを含む
-                # オッズ表の最小DOM領域だけを取得する。
-                select_index, _ = find_range_select(page)
-                select = page.locator("select").nth(select_index)
-
-                table_text = select.evaluate(
-                    """
-                    element => {
-                        const expectedLabels = [
-                            "1 〜 50",
-                            "51 〜 100",
-                            "101 〜 150",
-                            "151 〜 200"
-                        ];
-
-                        let current = element;
-
-                        for (let depth = 0; depth < 12; depth += 1) {
-                            if (!current) break;
-
-                            const text = (
-                                current.innerText ||
-                                current.textContent ||
-                                ""
-                            ).trim();
-
-                            const lineCount = text
-                                .split(String.fromCharCode(10))
-                                .filter(line => line.trim().length > 0)
-                                .length;
-
-                            const hasRange = expectedLabels.some(
-                                value => text.includes(value)
-                            );
-
-                            /*
-                             * selectの選択肢とオッズ一覧を含みつつ、
-                             * ページ全体ほど大きくない最初の祖先を採用。
-                             */
-                            if (
-                                hasRange &&
-                                lineCount >= 150 &&
-                                lineCount <= 1200
-                            ) {
-                                return text;
-                            }
-
-                            current = current.parentElement;
-                        }
-
-                        return (
-                            element.parentElement?.parentElement?.innerText ||
-                            document.body.innerText
-                        );
-                    }
-                    """
-                )
+                body_text = page.locator(
+                    "body"
+                ).inner_text()
 
                 rows = parse_range_text(
-                    table_text,
+                    body_text,
                     label,
                 )
 

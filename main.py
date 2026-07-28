@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.0.1：全3連単オッズ解析修正版")
+st.caption("Ver.1.0.6：複数解析統合版")
 
 
 def make_csv(rows: list[dict]) -> bytes:

@@ -1,0 +1,476 @@
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from playwright.sync_api import sync_playwright
+
+
+RANGE_PATTERN = re.compile(
+    r"^\s*(\d+)\s*[〜～~\-]\s*(\d+)\s*$"
+)
+
+
+def racecard_to_odds_url(racecard_url: str) -> str:
+    if "/racecard/" not in racecard_url:
+        raise ValueError("WINTICKETの出走表URLではありません。")
+
+    return racecard_url.replace(
+        "/racecard/",
+        "/odds/",
+        1,
+    )
+
+
+def normalize_range_label(value: str) -> str:
+    return (
+        value.replace(" ", "")
+        .replace("～", "〜")
+        .replace("~", "〜")
+        .replace("-", "〜")
+    )
+
+
+def parse_range_label(
+    label: str,
+) -> tuple[int, int] | None:
+    match = RANGE_PATTERN.match(label)
+
+    if not match:
+        return None
+
+    start = int(match.group(1))
+    end = int(match.group(2))
+
+    if start < 1 or end < start:
+        return None
+
+    return start, end
+
+
+def parse_range_text(
+    body_text: str,
+    range_label: str,
+) -> list[dict[str, Any]]:
+    """
+    現在表示されている人気順範囲を解析する。
+
+    人気順位を起点にし、その後に現れる
+    1着・2着・3着車番とオッズを個別に探す。
+    余分なラベルや表示文字が入ってもずれにくい。
+    """
+    parsed_range = parse_range_label(range_label)
+
+    if parsed_range is None:
+        return []
+
+    start_rank, end_rank = parsed_range
+
+    lines = [
+        line.strip()
+        for line in body_text.splitlines()
+        if line.strip()
+    ]
+
+    normalized_target = normalize_range_label(
+        range_label
+    )
+
+    section_start = 0
+
+    for index, line in enumerate(lines):
+        if normalize_range_label(line) == normalized_target:
+            section_start = index + 1
+            break
+
+    section = lines[section_start:]
+
+    rows: list[dict[str, Any]] = []
+    seen_ranks: set[int] = set()
+    seen_combinations: set[str] = set()
+
+    for index, line in enumerate(section):
+        cleaned_rank = (
+            line.replace(",", "")
+            .replace("位", "")
+            .strip()
+        )
+
+        if not re.fullmatch(r"\d{1,3}", cleaned_rank):
+            continue
+
+        rank = int(cleaned_rank)
+
+        if not start_rank <= rank <= end_rank:
+            continue
+
+        if rank in seen_ranks:
+            continue
+
+        numeric_after: list[str] = []
+
+        # 次の順位へ到達する前までを基本探索範囲とする。
+        # UI上の余分な文字を考慮し、最大20行先まで確認する。
+        for following in section[index + 1:index + 21]:
+            cleaned = (
+                following.replace(",", "")
+                .replace("倍", "")
+                .replace("位", "")
+                .strip()
+            )
+
+            if not re.fullmatch(
+                r"\d+(?:\.\d+)?",
+                cleaned,
+            ):
+                continue
+
+            # 次の人気順位らしい整数に到達した場合、
+            # 必要な4値がまだ揃っていなければ探索を終了する。
+            if (
+                len(numeric_after) < 4
+                and re.fullmatch(r"\d{1,3}", cleaned)
+                and start_rank <= int(cleaned) <= end_rank
+                and int(cleaned) != rank
+            ):
+                break
+
+            numeric_after.append(cleaned)
+
+            if len(numeric_after) >= 4:
+                break
+
+        if len(numeric_after) < 4:
+            continue
+
+        first_text = numeric_after[0]
+        second_text = numeric_after[1]
+        third_text = numeric_after[2]
+        odds_text = numeric_after[3]
+
+        if not all(
+            re.fullmatch(r"[1-9]", value)
+            for value in (
+                first_text,
+                second_text,
+                third_text,
+            )
+        ):
+            continue
+
+        if len({
+            first_text,
+            second_text,
+            third_text,
+        }) != 3:
+            continue
+
+        if not re.fullmatch(
+            r"\d+(?:\.\d+)?",
+            odds_text,
+        ):
+            continue
+
+        odds = float(odds_text)
+
+        if not 1.0 < odds < 1_000_000:
+            continue
+
+        combination = (
+            f"{first_text}-"
+            f"{second_text}-"
+            f"{third_text}"
+        )
+
+        if combination in seen_combinations:
+            continue
+
+        rows.append(
+            {
+                "組番": combination,
+                "オッズ": odds,
+                "人気": rank,
+            }
+        )
+
+        seen_ranks.add(rank)
+        seen_combinations.add(combination)
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["人気"],
+            row["組番"],
+        ),
+    )
+
+
+def find_range_select(page) -> tuple[int, list[dict[str, Any]]]:
+    select_count = page.locator("select").count()
+
+    best_index = -1
+    best_options: list[dict[str, Any]] = []
+
+    for select_index in range(select_count):
+        select = page.locator("select").nth(
+            select_index
+        )
+
+        options = select.locator("option").evaluate_all(
+            """
+            elements => elements.map(option => ({
+                value: option.value,
+                text: (option.textContent || '').trim()
+            }))
+            """
+        )
+
+        range_options = []
+
+        for option in options:
+            parsed = parse_range_label(
+                option.get("text", "")
+            )
+
+            if parsed is None:
+                continue
+
+            range_options.append(
+                {
+                    "value": str(
+                        option.get("value", "")
+                    ),
+                    "text": option.get(
+                        "text",
+                        "",
+                    ),
+                    "start": parsed[0],
+                    "end": parsed[1],
+                }
+            )
+
+        if len(range_options) > len(best_options):
+            best_index = select_index
+            best_options = range_options
+
+    if best_index < 0 or len(best_options) < 2:
+        raise RuntimeError(
+            "オッズ範囲のselect要素を検出できません。"
+        )
+
+    return best_index, best_options
+
+
+def fetch_all_odds(
+    racecard_url: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    odds_url = racecard_to_odds_url(
+        racecard_url
+    )
+
+    logs = [
+        "取得方式: Google Chrome DOM切替",
+        f"オッズ取得元: {odds_url}",
+    ]
+
+    all_rows: dict[str, dict[str, Any]] = {}
+
+    with sync_playwright() as playwright:
+        launch_options = {
+            "headless": True,
+            "args": [
+                "--disable-dev-shm-usage",
+                "--disable-background-networking",
+                "--disable-extensions",
+                "--disable-gpu",
+            ],
+        }
+
+        try:
+            browser = playwright.chromium.launch(
+                channel="chrome",
+                **launch_options,
+            )
+            logs.append(
+                "ブラウザ: システムのGoogle Chrome"
+            )
+        except Exception:
+            chrome_path = (
+                "/Applications/"
+                "Google Chrome.app/"
+                "Contents/MacOS/"
+                "Google Chrome"
+            )
+
+            browser = playwright.chromium.launch(
+                executable_path=chrome_path,
+                **launch_options,
+            )
+            logs.append(
+                "ブラウザ: Google Chrome実行ファイル"
+            )
+
+        context = browser.new_context(
+            viewport={
+                "width": 1280,
+                "height": 900,
+            },
+            user_agent=(
+                "Mozilla/5.0 "
+                "(Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 "
+                "Chrome/126 Safari/537.36"
+            ),
+        )
+
+        page = context.new_page()
+
+        page.goto(
+            odds_url,
+            wait_until="domcontentloaded",
+            timeout=60_000,
+        )
+
+        page.wait_for_timeout(2_000)
+
+        logs.append(
+            f"ページタイトル: {page.title()}"
+        )
+
+        select_index, options = find_range_select(
+            page
+        )
+
+        logs.append(
+            "検出範囲: "
+            + "、".join(
+                option["text"]
+                for option in options
+            )
+        )
+
+        for option in options:
+            label = option["text"]
+            value = option["value"]
+
+            try:
+                # React等の再描画で要素が差し替わるため
+                # 毎回select要素を探し直す。
+                select_index, _ = find_range_select(
+                    page
+                )
+
+                select = page.locator(
+                    "select"
+                ).nth(select_index)
+
+                select.select_option(
+                    value=value
+                )
+
+                page.wait_for_timeout(700)
+
+                body_text = page.locator(
+                    "body"
+                ).inner_text()
+
+                rows = parse_range_text(
+                    body_text,
+                    label,
+                )
+
+                added = 0
+
+                for row in rows:
+                    combination = row["組番"]
+
+                    if combination not in all_rows:
+                        added += 1
+
+                    all_rows[combination] = row
+
+                logs.append(
+                    f"{label}: "
+                    f"{len(rows)}件解析／"
+                    f"{added}件追加"
+                )
+
+            except Exception as exc:
+                logs.append(
+                    f"{label}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        context.close()
+        browser.close()
+
+    result = sorted(
+        all_rows.values(),
+        key=lambda row: (
+            row.get("人気", 9999),
+            row["組番"],
+        ),
+    )
+
+    logs.append(
+        f"最終取得件数: {len(result)}件"
+    )
+
+    return result, logs
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--racecard-url",
+        required=True,
+    )
+
+    parser.add_argument(
+        "--output",
+        required=True,
+    )
+
+    arguments = parser.parse_args()
+
+    output_path = Path(arguments.output)
+
+    try:
+        rows, logs = fetch_all_odds(
+            arguments.racecard_url
+        )
+
+        payload = {
+            "success": True,
+            "rows": rows,
+            "logs": logs,
+        }
+
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "rows": [],
+            "logs": [
+                "DOM取得Workerでエラーが発生しました。",
+                f"{type(exc).__name__}: {exc}",
+            ],
+        }
+
+    output_path.write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
