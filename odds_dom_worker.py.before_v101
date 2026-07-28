@@ -56,11 +56,14 @@ def parse_range_text(
     range_label: str,
 ) -> list[dict[str, Any]]:
     """
-    現在表示されている人気順範囲を解析する。
+    現在表示中の人気順範囲を解析する。
 
-    人気順位を起点にし、その後に現れる
-    1着・2着・3着車番とオッズを個別に探す。
-    余分なラベルや表示文字が入ってもずれにくい。
+    表示順:
+    人気順位
+    1着車番
+    2着車番
+    3着車番
+    オッズ
     """
     parsed_range = parse_range_label(range_label)
 
@@ -68,6 +71,7 @@ def parse_range_text(
         return []
 
     start_rank, end_rank = parsed_range
+    expected_count = end_rank - start_rank + 1
 
     lines = [
         line.strip()
@@ -79,104 +83,66 @@ def parse_range_text(
         range_label
     )
 
-    section_start = 0
+    start_index = 0
 
     for index, line in enumerate(lines):
         if normalize_range_label(line) == normalized_target:
-            section_start = index + 1
+            start_index = index + 1
             break
 
-    section = lines[section_start:]
+    tokens: list[str] = []
 
-    rows: list[dict[str, Any]] = []
-    seen_ranks: set[int] = set()
-    seen_combinations: set[str] = set()
-
-    for index, line in enumerate(section):
-        cleaned_rank = (
+    for line in lines[start_index:]:
+        cleaned = (
             line.replace(",", "")
-            .replace("位", "")
+            .replace("倍", "")
             .strip()
         )
 
-        if not re.fullmatch(r"\d{1,3}", cleaned_rank):
-            continue
+        if re.fullmatch(r"\d+(?:\.\d+)?", cleaned):
+            tokens.append(cleaned)
 
-        rank = int(cleaned_rank)
+    rows: list[dict[str, Any]] = []
+    seen_combinations: set[str] = set()
 
-        if not start_rank <= rank <= end_rank:
-            continue
+    index = 0
 
-        if rank in seen_ranks:
-            continue
+    while index <= len(tokens) - 5:
+        rank_text = tokens[index]
+        first_text = tokens[index + 1]
+        second_text = tokens[index + 2]
+        third_text = tokens[index + 3]
+        odds_text = tokens[index + 4]
 
-        numeric_after: list[str] = []
-
-        # 次の順位へ到達する前までを基本探索範囲とする。
-        # UI上の余分な文字を考慮し、最大20行先まで確認する。
-        for following in section[index + 1:index + 21]:
-            cleaned = (
-                following.replace(",", "")
-                .replace("倍", "")
-                .replace("位", "")
-                .strip()
-            )
-
-            if not re.fullmatch(
-                r"\d+(?:\.\d+)?",
-                cleaned,
-            ):
-                continue
-
-            # 次の人気順位らしい整数に到達した場合、
-            # 必要な4値がまだ揃っていなければ探索を終了する。
-            if (
-                len(numeric_after) < 4
-                and re.fullmatch(r"\d{1,3}", cleaned)
-                and start_rank <= int(cleaned) <= end_rank
-                and int(cleaned) != rank
-            ):
-                break
-
-            numeric_after.append(cleaned)
-
-            if len(numeric_after) >= 4:
-                break
-
-        if len(numeric_after) < 4:
-            continue
-
-        first_text = numeric_after[0]
-        second_text = numeric_after[1]
-        third_text = numeric_after[2]
-        odds_text = numeric_after[3]
-
-        if not all(
-            re.fullmatch(r"[1-9]", value)
-            for value in (
+        valid = (
+            re.fullmatch(r"\d{1,3}", rank_text)
+            and re.fullmatch(r"[1-9]", first_text)
+            and re.fullmatch(r"[1-9]", second_text)
+            and re.fullmatch(r"[1-9]", third_text)
+            and len({
                 first_text,
                 second_text,
                 third_text,
+            }) == 3
+            and re.fullmatch(
+                r"\d+(?:\.\d+)?",
+                odds_text,
             )
-        ):
+        )
+
+        if not valid:
+            index += 1
             continue
 
-        if len({
-            first_text,
-            second_text,
-            third_text,
-        }) != 3:
-            continue
-
-        if not re.fullmatch(
-            r"\d+(?:\.\d+)?",
-            odds_text,
-        ):
-            continue
-
+        rank = int(rank_text)
         odds = float(odds_text)
 
+        if not start_rank <= rank <= end_rank:
+            index += 1
+            continue
+
         if not 1.0 < odds < 1_000_000:
+            index += 1
             continue
 
         combination = (
@@ -185,27 +151,22 @@ def parse_range_text(
             f"{third_text}"
         )
 
-        if combination in seen_combinations:
-            continue
+        if combination not in seen_combinations:
+            rows.append(
+                {
+                    "組番": combination,
+                    "オッズ": odds,
+                    "人気": rank,
+                }
+            )
+            seen_combinations.add(combination)
 
-        rows.append(
-            {
-                "組番": combination,
-                "オッズ": odds,
-                "人気": rank,
-            }
-        )
+        index += 5
 
-        seen_ranks.add(rank)
-        seen_combinations.add(combination)
+        if len(rows) >= expected_count:
+            break
 
-    return sorted(
-        rows,
-        key=lambda row: (
-            row["人気"],
-            row["組番"],
-        ),
-    )
+    return rows
 
 
 def find_range_select(page) -> tuple[int, list[dict[str, Any]]]:
