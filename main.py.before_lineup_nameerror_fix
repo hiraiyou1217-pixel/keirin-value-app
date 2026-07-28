@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.5.1：車立て数自動判定版")
+st.caption("Ver.1.5：予算別買い目自動配分版")
 
 
 def make_csv(
@@ -168,7 +168,6 @@ defaults = {
     "lineup_groups": [],
     "lineup_logs": [],
     "bet_plan": [],
-    "bet_plan_message": "",
 }
 
 for key, default in defaults.items():
@@ -532,11 +531,6 @@ if odds:
         "妙味期待値を計算",
         type="primary",
     ):
-        lineup_groups = st.session_state.get(
-            "lineup_groups",
-            [],
-        )
-
         results = calculate_expected_values(
             odds,
             scores=scores,
@@ -682,63 +676,24 @@ if expected_values:
             format_func=lambda value: f"{value:,}円",
         )
 
-    qualifying_rows = [
-        row
-        for row in expected_values
-        if float(row.get("期待回収率", 0))
-        >= float(minimum_expected_return)
-    ]
-
-    positive_kelly_rows = [
-        row
-        for row in qualifying_rows
-        if float(row.get("モデル確率", 0))
-        * float(row.get("オッズ", 0)) > 1.0
-    ]
-
-    diagnostic_col1, diagnostic_col2 = st.columns(2)
-
-    with diagnostic_col1:
-        st.metric(
-            "最低期待回収率以上",
-            f"{len(qualifying_rows)}件",
-        )
-
-    with diagnostic_col2:
-        st.metric(
-            "配分候補",
-            f"{len(positive_kelly_rows)}件",
-        )
-
     if st.button(
         "予算から買い目を自動配分",
         type="primary",
     ):
-        generated_plan = allocate_bet_budget(
-            expected_values,
-            budget=int(betting_budget),
-            minimum_expected_return=(
-                minimum_expected_return
-            ),
-            maximum_bets=int(maximum_bets),
-            minimum_unit=int(minimum_unit),
-            maximum_bet_ratio=(
-                maximum_bet_ratio
-            ),
+        st.session_state.bet_plan = (
+            allocate_bet_budget(
+                expected_values,
+                budget=int(betting_budget),
+                minimum_expected_return=(
+                    minimum_expected_return
+                ),
+                maximum_bets=int(maximum_bets),
+                minimum_unit=int(minimum_unit),
+                maximum_bet_ratio=(
+                    maximum_bet_ratio
+                ),
+            )
         )
-
-        st.session_state.bet_plan = generated_plan
-
-        if not generated_plan:
-            st.session_state.bet_plan_message = (
-                "条件を満たす買い目がないため、"
-                "購入プランを作成しませんでした。"
-            )
-        else:
-            st.session_state.bet_plan_message = (
-                f"{len(generated_plan)}点の"
-                "買い目プランを作成しました。"
-            )
 
     bet_plan = st.session_state.bet_plan
 
@@ -884,36 +839,11 @@ if expected_values:
             mime="text/csv",
         )
 
-    else:
-        plan_message = st.session_state.get(
-            "bet_plan_message",
-            "",
+    elif st.session_state.bet_plan == []:
+        st.caption(
+            "期待回収率、ケリー基準、最大買い目数、"
+            "1点上限を使って購入額を100円単位で配分します。"
         )
-
-        if plan_message:
-            st.warning(plan_message)
-
-        if not qualifying_rows:
-            st.info(
-                "最低期待回収率を超える買い目がありません。"
-                "「最低期待回収率」を1.05または1.00へ"
-                "下げて再計算してください。"
-            )
-        elif not positive_kelly_rows:
-            st.info(
-                "期待回収率の条件は満たしていますが、"
-                "ケリー基準がプラスになる買い目がありません。"
-            )
-        elif int(betting_budget) < int(minimum_unit):
-            st.info(
-                "購入予算が購入単位より小さいため、"
-                "配分できません。"
-            )
-        else:
-            st.caption(
-                "設定後に「予算から買い目を自動配分」を"
-                "押してください。"
-            )
 
     st.download_button(
         "期待値CSVをダウンロード",
