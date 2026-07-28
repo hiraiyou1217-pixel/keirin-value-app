@@ -360,7 +360,6 @@ def fetch_all_odds(
     ]
 
     all_rows: dict[str, dict[str, Any]] = {}
-    duplicate_rows: list[dict[str, Any]] = []
 
     with sync_playwright() as playwright:
         launch_options = {
@@ -538,18 +537,7 @@ def fetch_all_odds(
                             f"今回オッズ={row.get('オッズ')}"
                         )
 
-                        # 重複した後発行を保存し、
-                        # 全範囲取得後に不足組番との対応を試みる。
-                        duplicate_rows.append(
-                            {
-                                "組番": combination,
-                                "オッズ": float(row.get("オッズ", 0)),
-                                "人気": int(row.get("人気", 9999)),
-                                "範囲": label,
-                            }
-                        )
-
-                        # 最初に取得した正しい可能性の高い行を保持
+                        # 既存データを上書きせず、最初に取得した行を保持
                         continue
 
                     all_rows[combination] = row
@@ -594,83 +582,6 @@ def fetch_all_odds(
         context.close()
         browser.close()
 
-    riders = sorted({
-        int(number)
-        for row in all_rows.values()
-        for number in str(row.get("組番", "")).split("-")
-        if number.isdigit()
-    })
-
-    expected_combinations: set[str] = set()
-
-    if len(riders) >= 3:
-        expected_combinations = {
-            f"{first}-{second}-{third}"
-            for first in riders
-            for second in riders
-            for third in riders
-            if len({first, second, third}) == 3
-        }
-
-    acquired_combinations = set(all_rows.keys())
-    missing_combinations = sorted(
-        expected_combinations - acquired_combinations
-    )
-
-    logs.append(
-        f"補正前取得件数: {len(all_rows)}件"
-    )
-
-    #
-    # 自動補正
-    #
-    # 重複した後発行と不足組番が同数なら、
-    # 人気順位とオッズを維持したまま不足組番へ割り当てる。
-    #
-    # 例:
-    # 人気95位 1-7-4 472.0倍（既存組番と重複）
-    # 不足組番 7-2-1
-    # → 人気95位 7-2-1 472.0倍
-    #
-    if (
-        missing_combinations
-        and duplicate_rows
-        and len(missing_combinations) == len(duplicate_rows)
-    ):
-        sorted_duplicates = sorted(
-            duplicate_rows,
-            key=lambda row: row.get("人気", 9999),
-        )
-
-        #
-        # 不足が1件なら対応は一意。
-        # 複数件の場合は組番順へ機械的に割り当てず、
-        # オッズ表の人気順に対して不足組番を順番に補う。
-        #
-        for duplicate, missing_combo in zip(
-            sorted_duplicates,
-            missing_combinations,
-        ):
-            corrected = {
-                "組番": missing_combo,
-                "オッズ": float(duplicate["オッズ"]),
-                "人気": int(duplicate["人気"]),
-            }
-
-            all_rows[missing_combo] = corrected
-
-            logs.append(
-                "自動補正: "
-                f"人気{duplicate['人気']} "
-                f"{duplicate['組番']} → {missing_combo} "
-                f"オッズ={duplicate['オッズ']}"
-            )
-
-        acquired_combinations = set(all_rows.keys())
-        missing_combinations = sorted(
-            expected_combinations - acquired_combinations
-        )
-
     result = sorted(
         all_rows.values(),
         key=lambda row: (
@@ -683,78 +594,53 @@ def fetch_all_odds(
         f"最終取得件数: {len(result)}件"
     )
 
-    if riders:
+    riders = sorted({
+        int(number)
+        for row in result
+        for number in str(row.get("組番", "")).split("-")
+        if number.isdigit()
+    })
+
+    if len(riders) >= 3:
+        expected_combinations = {
+            f"{first}-{second}-{third}"
+            for first in riders
+            for second in riders
+            for third in riders
+            if len({first, second, third}) == 3
+        }
+
+        acquired_combinations = {
+            str(row.get("組番", ""))
+            for row in result
+        }
+
+        missing_combinations = sorted(
+            expected_combinations - acquired_combinations
+        )
+
+        unexpected_combinations = sorted(
+            acquired_combinations - expected_combinations
+        )
+
         logs.append(
             f"出走車番: {riders}"
         )
-
-    if expected_combinations:
         logs.append(
             f"理論組番数: {len(expected_combinations)}件"
         )
 
-    if missing_combinations:
-        logs.append(
-            "不足組番: "
-            + "、".join(missing_combinations)
-        )
-    else:
-        logs.append(
-            "全組番の整合性確認: OK"
-        )
+        if missing_combinations:
+            logs.append(
+                "不足組番: "
+                + "、".join(missing_combinations)
+            )
 
-    #
-    # 人気順位の重複・欠損も確認
-    #
-    ranks = [
-        int(row.get("人気", 9999))
-        for row in result
-        if int(row.get("人気", 9999)) < 9999
-    ]
-
-    rank_counts: dict[int, int] = {}
-
-    for rank in ranks:
-        rank_counts[rank] = rank_counts.get(rank, 0) + 1
-
-    duplicate_ranks = sorted(
-        rank
-        for rank, count in rank_counts.items()
-        if count > 1
-    )
-
-    expected_rank_count = len(expected_combinations)
-    missing_ranks = []
-
-    if expected_rank_count:
-        missing_ranks = [
-            rank
-            for rank in range(1, expected_rank_count + 1)
-            if rank not in rank_counts
-        ]
-
-    if duplicate_ranks:
-        logs.append(
-            "重複人気順位: "
-            + "、".join(str(rank) for rank in duplicate_ranks)
-        )
-
-    if missing_ranks:
-        logs.append(
-            "不足人気順位: "
-            + "、".join(str(rank) for rank in missing_ranks)
-        )
-
-    if (
-        expected_combinations
-        and len(result) == len(expected_combinations)
-        and not missing_combinations
-        and not duplicate_ranks
-        and not missing_ranks
-    ):
-        logs.append(
-            "オッズデータ完全性: OK"
-        )
+        if unexpected_combinations:
+            logs.append(
+                "不正組番: "
+                + "、".join(unexpected_combinations)
+            )
 
     return result, logs
 

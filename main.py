@@ -8,6 +8,10 @@ from io import StringIO
 import streamlit as st
 
 from odds_browser import fetch_all_trifecta_odds_browser
+from probability_model import (
+    calculate_expected_values,
+    extract_rider_numbers,
+)
 from race_catalog import fetch_race_catalog
 
 
@@ -17,49 +21,47 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.0.6：複数解析統合版")
+st.caption("Ver.1.1.2：全オッズ自動補正版")
 
 
-def make_csv(rows: list[dict]) -> bytes:
+def make_csv(
+    rows: list[dict],
+    fieldnames: list[str],
+) -> bytes:
     buffer = StringIO()
+
     writer = csv.DictWriter(
         buffer,
-        fieldnames=["組番", "オッズ", "人気"],
+        fieldnames=fieldnames,
+        extrasaction="ignore",
     )
+
     writer.writeheader()
 
     for row in rows:
-        writer.writerow(
-            {
-                "組番": row.get("組番", ""),
-                "オッズ": row.get("オッズ", ""),
-                "人気": row.get("人気", ""),
-            }
-        )
+        writer.writerow(row)
 
     return buffer.getvalue().encode("utf-8-sig")
 
 
-def render_odds_table(rows: list[dict]) -> None:
+def render_odds_table(
+    rows: list[dict],
+) -> None:
     table_rows = []
 
     for row in rows:
-        combo = escape(str(row.get("組番", "")))
-        odds = escape(str(row.get("オッズ", "")))
-        rank = escape(str(row.get("人気", "")))
-
         table_rows.append(
             f"""
             <tr>
-                <td>{rank}</td>
-                <td>{combo}</td>
-                <td>{odds}</td>
+                <td>{escape(str(row.get("人気", "")))}</td>
+                <td>{escape(str(row.get("組番", "")))}</td>
+                <td>{escape(str(row.get("オッズ", "")))}</td>
             </tr>
             """
         )
 
     html = f"""
-    <div style="max-height:600px;overflow:auto;border:1px solid #ddd;">
+    <div style="max-height:520px;overflow:auto;border:1px solid #ddd;">
         <table style="width:100%;border-collapse:collapse;">
             <thead>
                 <tr style="position:sticky;top:0;background:#f5f5f5;">
@@ -75,25 +77,97 @@ def render_odds_table(rows: list[dict]) -> None:
     </div>
     """
 
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(
+        html,
+        unsafe_allow_html=True,
+    )
 
 
-selected_date = st.date_input(
-    "開催日",
-    value=date.today(),
-)
+def render_expected_value_table(
+    rows: list[dict],
+    threshold: float,
+) -> None:
+    table_rows = []
+
+    for index, row in enumerate(rows, start=1):
+        expected_return = float(
+            row.get("期待回収率", 0)
+        )
+
+        recommendation = (
+            "候補"
+            if expected_return >= threshold
+            else ""
+        )
+
+        table_rows.append(
+            f"""
+            <tr>
+                <td>{index}</td>
+                <td>{escape(str(row["組番"]))}</td>
+                <td>{row["人気"]}</td>
+                <td>{row["オッズ"]:.1f}</td>
+                <td>{row["モデル確率"] * 100:.3f}%</td>
+                <td>{row["市場確率"] * 100:.3f}%</td>
+                <td>{row["フェアオッズ"]:.1f}</td>
+                <td>{row["期待回収率"]:.3f}</td>
+                <td>{row["期待利益率"] * 100:+.1f}%</td>
+                <td>{row["妙味倍率"]:.2f}</td>
+                <td>{row["参考購入額"]:,}円</td>
+                <td>{recommendation}</td>
+            </tr>
+            """
+        )
+
+    html = f"""
+    <div style="max-height:700px;overflow:auto;border:1px solid #ddd;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <thead>
+                <tr style="position:sticky;top:0;background:#f5f5f5;">
+                    <th>順位</th>
+                    <th>組番</th>
+                    <th>人気</th>
+                    <th>オッズ</th>
+                    <th>モデル確率</th>
+                    <th>市場確率</th>
+                    <th>フェアオッズ</th>
+                    <th>期待回収率</th>
+                    <th>期待利益率</th>
+                    <th>妙味倍率</th>
+                    <th>参考購入額</th>
+                    <th>判定</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(table_rows)}
+            </tbody>
+        </table>
+    </div>
+    """
+
+    st.markdown(
+        html,
+        unsafe_allow_html=True,
+    )
+
 
 defaults = {
     "catalog": {},
     "catalog_logs": [],
     "odds": [],
     "odds_logs": [],
+    "expected_values": [],
 }
 
 for key, default in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
+
+selected_date = st.date_input(
+    "開催日",
+    value=date.today(),
+)
 
 if st.button(
     "この日の開催一覧を取得",
@@ -103,17 +177,21 @@ if st.button(
         with st.spinner(
             "WINTICKETから開催一覧を確認しています"
         ):
-            catalog, logs = fetch_race_catalog(selected_date)
+            catalog, logs = fetch_race_catalog(
+                selected_date
+            )
 
         st.session_state.catalog = catalog
         st.session_state.catalog_logs = logs
         st.session_state.odds = []
         st.session_state.odds_logs = []
+        st.session_state.expected_values = []
 
     except Exception as exc:
         st.session_state.catalog = {}
         st.session_state.catalog_logs = [
-            f"開催一覧取得エラー: {type(exc).__name__}: {exc}"
+            f"開催一覧取得エラー: "
+            f"{type(exc).__name__}: {exc}"
         ]
 
 
@@ -157,68 +235,259 @@ if catalog:
     ):
         try:
             with st.spinner(
-                "ブラウザを起動せず、オッズを取得しています"
+                "全3連単オッズを取得しています"
             ):
-                odds, logs = fetch_all_trifecta_odds_browser(selected_race["url"])
-
-            # Streamlitへ渡す前に標準型へ統一
-            safe_rows = []
-
-            for row in odds:
-                safe_rows.append(
-                    {
-                        "組番": str(row.get("組番", "")),
-                        "オッズ": float(row.get("オッズ", 0)),
-                        "人気": int(row.get("人気", 9999)),
-                    }
+                odds, logs = (
+                    fetch_all_trifecta_odds_browser(
+                        selected_race["url"]
+                    )
                 )
 
-            st.session_state.odds = safe_rows
+            st.session_state.odds = odds
             st.session_state.odds_logs = logs
+            st.session_state.expected_values = []
 
         except Exception as exc:
             st.session_state.odds = []
             st.session_state.odds_logs = [
-                f"オッズ取得エラー: {type(exc).__name__}: {exc}"
+                f"オッズ取得エラー: "
+                f"{type(exc).__name__}: {exc}"
             ]
 
-    odds = st.session_state.odds
 
-    if odds:
-        st.success(
-            f"3連単オッズを{len(odds)}件取得しました。"
-        )
+odds = st.session_state.odds
 
-        render_odds_table(odds)
+if odds:
+    st.divider()
+    st.subheader("取得オッズ")
 
-        st.download_button(
-            "CSVをダウンロード",
-            data=make_csv(odds),
-            file_name=(
-                f"{selected_date:%Y%m%d}_"
-                f"{venue}_{selected_label}_"
-                "trifecta_odds.csv"
-            ),
-            mime="text/csv",
-        )
-
-    elif st.session_state.odds_logs:
-        st.warning(
-            "取得処理は終了しましたが、"
-            "有効なオッズを検出できませんでした。"
-        )
-
-    else:
-        st.info(
-            "競輪場とレース番号を選び、"
-            "「3連単オッズを取得」を押してください。"
-        )
-
-else:
-    st.info(
-        "開催日を選び、"
-        "「この日の開催一覧を取得」を押してください。"
+    st.success(
+        f"3連単オッズを{len(odds)}件取得しました。"
     )
+
+    render_odds_table(odds)
+
+    st.download_button(
+        "オッズCSVをダウンロード",
+        data=make_csv(
+            odds,
+            ["人気", "組番", "オッズ"],
+        ),
+        file_name=(
+            f"{selected_date:%Y%m%d}_"
+            f"{venue}_{selected_label}_"
+            "trifecta_odds.csv"
+        ),
+        mime="text/csv",
+    )
+
+    st.divider()
+    st.subheader("選手評価と期待値設定")
+
+    riders = extract_rider_numbers(odds)
+
+    st.write(
+        "各選手を100点満点の目安で評価してください。"
+        "絶対値より、選手間の点差が重要です。"
+    )
+
+    score_columns = st.columns(
+        min(len(riders), 9)
+    )
+
+    scores: dict[int, float] = {}
+
+    for index, rider in enumerate(riders):
+        with score_columns[index % len(score_columns)]:
+            scores[rider] = st.number_input(
+                f"{rider}番車",
+                min_value=0.0,
+                max_value=100.0,
+                value=50.0,
+                step=1.0,
+                key=f"score_{rider}",
+            )
+
+    settings_left, settings_middle, settings_right = (
+        st.columns(3)
+    )
+
+    with settings_left:
+        temperature = st.number_input(
+            "確率の平準化",
+            min_value=0.1,
+            max_value=20.0,
+            value=5.0,
+            step=0.1,
+            help=(
+                "小さいほど高評価選手を強く信頼し、"
+                "大きいほど確率差を小さくします。"
+            ),
+        )
+
+    with settings_middle:
+        minimum_expected_return = st.number_input(
+            "最低期待回収率",
+            min_value=0.5,
+            max_value=5.0,
+            value=1.10,
+            step=0.05,
+        )
+
+    with settings_right:
+        bankroll = st.number_input(
+            "参考資金",
+            min_value=1_000,
+            max_value=10_000_000,
+            value=10_000,
+            step=1_000,
+        )
+
+    kelly_fraction = st.slider(
+        "ケリー基準の使用割合",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.25,
+        step=0.05,
+        help=(
+            "1.0はフルケリー、0.25は4分の1ケリーです。"
+        ),
+    )
+
+    if st.button(
+        "妙味期待値を計算",
+        type="primary",
+    ):
+        results = calculate_expected_values(
+            odds,
+            scores=scores,
+            temperature=temperature,
+            bankroll=int(bankroll),
+            kelly_fraction=kelly_fraction,
+        )
+
+        st.session_state.expected_values = results
+
+
+expected_values = st.session_state.expected_values
+
+if expected_values:
+    st.divider()
+    st.subheader("妙味期待値ランキング")
+
+    filtered_results = [
+        row
+        for row in expected_values
+        if row["期待回収率"]
+        >= minimum_expected_return
+    ]
+
+    display_count = st.slider(
+        "表示件数",
+        min_value=5,
+        max_value=min(
+            100,
+            len(expected_values),
+        ),
+        value=min(
+            30,
+            len(expected_values),
+        ),
+        step=5,
+    )
+
+    if filtered_results:
+        st.success(
+            f"最低期待回収率"
+            f"{minimum_expected_return:.2f}以上："
+            f"{len(filtered_results)}件"
+        )
+    else:
+        st.warning(
+            "設定した最低期待回収率を超える"
+            "買い目はありません。"
+        )
+
+    render_expected_value_table(
+        expected_values[:display_count],
+        threshold=minimum_expected_return,
+    )
+
+    export_rows = []
+
+    for row in expected_values:
+        export_rows.append(
+            {
+                "人気": row["人気"],
+                "組番": row["組番"],
+                "オッズ": round(row["オッズ"], 3),
+                "モデル確率": round(
+                    row["モデル確率"],
+                    8,
+                ),
+                "市場確率": round(
+                    row["市場確率"],
+                    8,
+                ),
+                "フェアオッズ": round(
+                    row["フェアオッズ"],
+                    3,
+                ),
+                "期待回収率": round(
+                    row["期待回収率"],
+                    4,
+                ),
+                "期待利益率": round(
+                    row["期待利益率"],
+                    4,
+                ),
+                "妙味倍率": round(
+                    row["妙味倍率"],
+                    4,
+                ),
+                "参考購入額": row["参考購入額"],
+            }
+        )
+
+    st.download_button(
+        "期待値CSVをダウンロード",
+        data=make_csv(
+            export_rows,
+            [
+                "人気",
+                "組番",
+                "オッズ",
+                "モデル確率",
+                "市場確率",
+                "フェアオッズ",
+                "期待回収率",
+                "期待利益率",
+                "妙味倍率",
+                "参考購入額",
+            ],
+        ),
+        file_name=(
+            f"{selected_date:%Y%m%d}_"
+            f"{venue}_{selected_label}_"
+            "expected_values.csv"
+        ),
+        mime="text/csv",
+    )
+
+    with st.expander("期待値の計算方法"):
+        st.write(
+            "期待回収率 ＝ モデル的中確率 × オッズ"
+        )
+        st.write(
+            "妙味倍率 ＝ モデル的中確率 ÷ 市場確率"
+        )
+        st.write(
+            "フェアオッズ ＝ 1 ÷ モデル的中確率"
+        )
+        st.warning(
+            "評価点と確率モデルに基づく推定値であり、"
+            "利益や的中を保証するものではありません。"
+        )
 
 
 with st.expander("取得ログ・自己診断"):
