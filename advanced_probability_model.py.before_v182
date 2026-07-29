@@ -1,0 +1,510 @@
+from __future__ import annotations
+
+from math import exp
+from typing import Any
+
+
+def _number(
+    row: dict[str, Any],
+    key: str,
+    default: float = 0.0,
+) -> float:
+    value = row.get(key)
+
+    if value in (None, ""):
+        return default
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp(
+    value: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def _lineup_positions(
+    lineup_groups: list[list[int]],
+) -> dict[int, tuple[int, int, int]]:
+    """
+    車番 -> (ライン番号、ライン内位置、ライン長)
+    """
+    result: dict[int, tuple[int, int, int]] = {}
+
+    for group_index, group in enumerate(lineup_groups):
+        for position, rider in enumerate(group):
+            result[int(rider)] = (
+                group_index,
+                position,
+                len(group),
+            )
+
+    return result
+
+
+def _standardize(
+    values: dict[int, float],
+) -> dict[int, float]:
+    if not values:
+        return {}
+
+    average = sum(values.values()) / len(values)
+    variance = sum(
+        (value - average) ** 2
+        for value in values.values()
+    ) / len(values)
+
+    deviation = variance ** 0.5
+
+    if deviation < 0.000001:
+        return {
+            rider: 0.0
+            for rider in values
+        }
+
+    return {
+        rider: (value - average) / deviation
+        for rider, value in values.items()
+    }
+
+
+def _mode_settings(
+    model_mode: str,
+) -> dict[str, float]:
+    """
+    モードごとの補正強度。
+
+    的中率重視：
+        上位評価とラインを強める
+    バランス型：
+        標準設定
+    回収率重視：
+        補正を抑え、穴候補の確率を残す
+    """
+    if model_mode == "的中率重視":
+        return {
+            "score_scale": 0.095,
+            "form_scale": 1.10,
+            "line_scale": 1.20,
+            "temperature": 0.90,
+        }
+
+    if model_mode == "回収率重視":
+        return {
+            "score_scale": 0.060,
+            "form_scale": 0.80,
+            "line_scale": 0.80,
+            "temperature": 1.15,
+        }
+
+    return {
+        "score_scale": 0.075,
+        "form_scale": 1.00,
+        "line_scale": 1.00,
+        "temperature": 1.00,
+    }
+
+
+def build_position_weights(
+    scores: dict[int, float],
+    riders: list[dict[str, Any]],
+    lineup_groups: list[list[int]],
+    model_mode: str = "バランス型",
+) -> dict[int, dict[str, float]]:
+    settings = _mode_settings(model_mode)
+    lineup = _lineup_positions(lineup_groups)
+
+    rider_by_number = {
+        int(rider["車番"]): rider
+        for rider in riders
+        if rider.get("車番") is not None
+    }
+
+    competition_scores = {
+        number: _number(
+            rider,
+            "競走得点",
+        )
+        for number, rider in rider_by_number.items()
+    }
+
+    competition_z = _standardize(
+        competition_scores
+    )
+
+    result: dict[int, dict[str, float]] = {}
+
+    for number, manual_score in scores.items():
+        rider = rider_by_number.get(
+            int(number),
+            {},
+        )
+
+        style = str(
+            rider.get("脚質", "")
+        ).strip()
+
+        win_rate = _number(rider, "勝率")
+        place2_rate = _number(
+            rider,
+            "2連対率",
+        )
+        place3_rate = _number(
+            rider,
+            "3連対率",
+        )
+
+        b_count = _number(rider, "B")
+        h_count = _number(rider, "H")
+        s_count = _number(rider, "S")
+
+        _, position, line_length = lineup.get(
+            int(number),
+            (0, 0, 1),
+        )
+
+        score_component = (
+            float(manual_score) - 50.0
+        ) * settings["score_scale"]
+
+        competition_component = (
+            competition_z.get(
+                int(number),
+                0.0,
+            )
+            * 0.55
+            * settings["form_scale"]
+        )
+
+        first_log_weight = (
+            score_component
+            + competition_component
+            + win_rate * 0.012
+            + b_count * 0.035
+            + h_count * 0.015
+        )
+
+        second_log_weight = (
+            score_component * 0.85
+            + competition_component * 0.80
+            + place2_rate * 0.010
+            + s_count * 0.012
+        )
+
+        third_log_weight = (
+            score_component * 0.65
+            + competition_component * 0.60
+            + place3_rate * 0.009
+            + s_count * 0.015
+        )
+
+        # 脚質補正
+        if style == "逃":
+            first_log_weight += 0.32
+            second_log_weight += 0.08
+
+        elif style == "両":
+            first_log_weight += 0.22
+            second_log_weight += 0.18
+            third_log_weight += 0.08
+
+        elif style == "追":
+            first_log_weight -= 0.08
+            second_log_weight += 0.24
+            third_log_weight += 0.30
+
+        # ライン補正
+        if line_length >= 2:
+            line_scale = settings["line_scale"]
+
+            if position == 0:
+                first_log_weight += 0.12 * line_scale
+                second_log_weight += 0.05 * line_scale
+
+            elif position == 1:
+                first_log_weight += 0.08 * line_scale
+                second_log_weight += 0.30 * line_scale
+                third_log_weight += 0.20 * line_scale
+
+            elif position == 2:
+                second_log_weight += 0.08 * line_scale
+                third_log_weight += 0.28 * line_scale
+
+            else:
+                third_log_weight += 0.12 * line_scale
+
+        temperature = settings["temperature"]
+
+        result[int(number)] = {
+            "1着": exp(
+                _clamp(
+                    first_log_weight / temperature,
+                    -20.0,
+                    20.0,
+                )
+            ),
+            "2着": exp(
+                _clamp(
+                    second_log_weight / temperature,
+                    -20.0,
+                    20.0,
+                )
+            ),
+            "3着": exp(
+                _clamp(
+                    third_log_weight / temperature,
+                    -20.0,
+                    20.0,
+                )
+            ),
+        }
+
+    return result
+
+
+def calculate_model_probabilities(
+    odds_rows: list[dict[str, Any]],
+    position_weights: dict[
+        int,
+        dict[str, float],
+    ],
+) -> dict[str, float]:
+    raw: dict[str, float] = {}
+
+    for row in odds_rows:
+        combination = str(
+            row.get("組番", "")
+        )
+
+        parts = combination.split("-")
+
+        if len(parts) != 3:
+            continue
+
+        try:
+            first, second, third = map(
+                int,
+                parts,
+            )
+        except ValueError:
+            continue
+
+        if len({first, second, third}) != 3:
+            continue
+
+        if not all(
+            number in position_weights
+            for number in (
+                first,
+                second,
+                third,
+            )
+        ):
+            continue
+
+        probability_weight = (
+            position_weights[first]["1着"]
+            * position_weights[second]["2着"]
+            * position_weights[third]["3着"]
+        )
+
+        raw[combination] = probability_weight
+
+    total = sum(raw.values())
+
+    if total <= 0:
+        return {
+            combination: 0.0
+            for combination in raw
+        }
+
+    return {
+        combination: value / total
+        for combination, value in raw.items()
+    }
+
+
+def calculate_market_probabilities(
+    odds_rows: list[dict[str, Any]],
+) -> dict[str, float]:
+    inverse_odds: dict[str, float] = {}
+
+    for row in odds_rows:
+        combination = str(
+            row.get("組番", "")
+        )
+
+        try:
+            odds = float(
+                row.get("オッズ", 0)
+            )
+        except (TypeError, ValueError):
+            continue
+
+        if odds > 1:
+            inverse_odds[combination] = (
+                1.0 / odds
+            )
+
+    total = sum(inverse_odds.values())
+
+    if total <= 0:
+        return {}
+
+    return {
+        combination: value / total
+        for combination, value
+        in inverse_odds.items()
+    }
+
+
+def _kelly_fraction(
+    probability: float,
+    odds: float,
+    fraction: float,
+) -> float:
+    if probability <= 0 or odds <= 1:
+        return 0.0
+
+    net_odds = odds - 1.0
+
+    full_kelly = (
+        net_odds * probability
+        - (1.0 - probability)
+    ) / net_odds
+
+    return max(
+        0.0,
+        full_kelly * fraction,
+    )
+
+
+def calculate_expected_values_v2(
+    odds_rows: list[dict[str, Any]],
+    scores: dict[int, float],
+    riders: list[dict[str, Any]] | None = None,
+    model_mode: str = "バランス型",
+    bankroll: int = 10_000,
+    kelly_fraction: float = 0.25,
+    lineup_groups: list[list[int]] | None = None,
+    **_: Any,
+) -> list[dict[str, Any]]:
+    """
+    着順別適性モデルによる期待値計算。
+
+    既存関数の追加引数も受け取れるよう、
+    未使用引数は **_ で受ける。
+    """
+    effective_riders = riders or []
+    effective_lineup = lineup_groups or []
+
+    position_weights = build_position_weights(
+        scores,
+        effective_riders,
+        effective_lineup,
+        model_mode=model_mode,
+    )
+
+    model_probabilities = (
+        calculate_model_probabilities(
+            odds_rows,
+            position_weights,
+        )
+    )
+
+    market_probabilities = (
+        calculate_market_probabilities(
+            odds_rows
+        )
+    )
+
+    results: list[dict[str, Any]] = []
+
+    for row in odds_rows:
+        combination = str(
+            row.get("組番", "")
+        )
+
+        try:
+            odds = float(
+                row.get("オッズ", 0)
+            )
+            popularity = int(
+                row.get("人気", 9999)
+            )
+        except (TypeError, ValueError):
+            continue
+
+        probability = (
+            model_probabilities.get(
+                combination,
+                0.0,
+            )
+        )
+
+        market_probability = (
+            market_probabilities.get(
+                combination,
+                0.0,
+            )
+        )
+
+        expected_return = (
+            probability * odds
+        )
+
+        fair_odds = (
+            1.0 / probability
+            if probability > 0
+            else 0.0
+        )
+
+        value_ratio = (
+            probability / market_probability
+            if market_probability > 0
+            else 0.0
+        )
+
+        kelly = _kelly_fraction(
+            probability,
+            odds,
+            fraction=kelly_fraction,
+        )
+
+        suggested_bet = int(
+            int(bankroll)
+            * kelly
+            // 100
+            * 100
+        )
+
+        results.append(
+            {
+                "人気": popularity,
+                "組番": combination,
+                "オッズ": odds,
+                "モデル確率": probability,
+                "市場確率": market_probability,
+                "フェアオッズ": fair_odds,
+                "期待回収率": expected_return,
+                "期待利益率": (
+                    expected_return - 1.0
+                ),
+                "妙味倍率": value_ratio,
+                "参考購入額": suggested_bet,
+                "モデルモード": model_mode,
+            }
+        )
+
+    return sorted(
+        results,
+        key=lambda item: (
+            -float(item["期待回収率"]),
+            int(item["人気"]),
+        ),
+    )

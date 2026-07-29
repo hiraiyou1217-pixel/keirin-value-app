@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_DOWN
-
 from math import exp
 from typing import Any
 
@@ -481,9 +479,6 @@ def allocate_bet_budget(
     maximum_bets: int = 10,
     minimum_unit: int = 100,
     maximum_bet_ratio: float = 0.25,
-    maximum_odds: float = 300.0,
-    maximum_popularity: int = 120,
-    minimum_model_probability: float = 0.001,
 ) -> list[dict[str, Any]]:
     """
     期待値とケリー基準を使い、指定予算を買い目へ配分する。
@@ -514,20 +509,10 @@ def allocate_bet_budget(
             row.get("オッズ", 0.0)
         )
 
-        popularity = int(
-            row.get("人気", 9999)
-        )
-
         if expected_return < minimum_expected_return:
             continue
 
-        if probability < minimum_model_probability:
-            continue
-
-        if odds <= 1 or odds > maximum_odds:
-            continue
-
-        if popularity > maximum_popularity:
+        if probability <= 0 or odds <= 1:
             continue
 
         net_odds = odds - 1.0
@@ -638,26 +623,8 @@ def allocate_bet_budget(
         odds = float(item["オッズ"])
         probability = float(item["モデル確率"])
 
-        # オッズは100円購入時の払戻倍率。
-        # 100円単位の票数 × 100円当たり払戻額で計算する。
-        units = amount // 100
-
-        payout_per_100 = (
-            Decimal(str(odds))
-            * Decimal("100")
-        ).quantize(
-            Decimal("10"),
-            rounding=ROUND_DOWN,
-        )
-
-        gross_payout = int(
-            Decimal(units)
-            * payout_per_100
-        )
-
-        item["取得時概算払戻"] = gross_payout
-        item["的中時利益"] = (
-            gross_payout - amount
+        item["的中時払戻"] = int(
+            amount * odds
         )
 
         item["期待払戻"] = round(

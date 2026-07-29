@@ -481,9 +481,6 @@ def allocate_bet_budget(
     maximum_bets: int = 10,
     minimum_unit: int = 100,
     maximum_bet_ratio: float = 0.25,
-    maximum_odds: float = 300.0,
-    maximum_popularity: int = 120,
-    minimum_model_probability: float = 0.001,
 ) -> list[dict[str, Any]]:
     """
     期待値とケリー基準を使い、指定予算を買い目へ配分する。
@@ -514,20 +511,10 @@ def allocate_bet_budget(
             row.get("オッズ", 0.0)
         )
 
-        popularity = int(
-            row.get("人気", 9999)
-        )
-
         if expected_return < minimum_expected_return:
             continue
 
-        if probability < minimum_model_probability:
-            continue
-
-        if odds <= 1 or odds > maximum_odds:
-            continue
-
-        if popularity > maximum_popularity:
+        if probability <= 0 or odds <= 1:
             continue
 
         net_odds = odds - 1.0
@@ -650,14 +637,9 @@ def allocate_bet_budget(
             rounding=ROUND_DOWN,
         )
 
-        gross_payout = int(
+        item["取得時概算払戻"] = int(
             Decimal(units)
             * payout_per_100
-        )
-
-        item["取得時概算払戻"] = gross_payout
-        item["的中時利益"] = (
-            gross_payout - amount
         )
 
         item["期待払戻"] = round(

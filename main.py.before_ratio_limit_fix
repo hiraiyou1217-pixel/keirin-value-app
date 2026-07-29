@@ -34,7 +34,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.8.9：オッズ完全性優先版")
+st.caption("Ver.1.8.7：市場確率設定復元版")
 
 
 def make_csv(
@@ -330,17 +330,12 @@ if catalog:
             ]
 
             if meaningful_merged_groups:
-                # 現在のDOM解析は数字の境界を保持できないため、
-                # 安全性を優先してコメント解析を採用する。
-                lineup_groups = comment_lineup_groups
+                lineup_groups = merged_lineup_groups
                 lineup_logs = (
                     dom_lineup_logs
                     + comment_lineup_logs
                     + merge_logs
-                    + [
-                        "DOM統合結果は参考表示のみ",
-                        "採用並び: コメント解析",
-                    ]
+                    + ["採用並び: DOM順＋コメント連携"]
                 )
             else:
                 lineup_groups = comment_lineup_groups
@@ -627,22 +622,11 @@ with st.form(
         "絶対値より、選手間の点差が重要です。"
     )
 
+    score_columns = st.columns(
+        min(len(riders), 9)
+    )
+
     scores: dict[int, float] = {}
-
-    if not riders:
-        st.warning(
-            "選手データがありません。"
-            "先にメイン画面でオッズと出走表を取得してください。"
-        )
-
-        score_columns = []
-    else:
-        score_columns = st.columns(
-            max(
-                1,
-                min(len(riders), 9),
-            )
-        )
 
     for index, rider in enumerate(riders):
         with score_columns[index % len(score_columns)]:

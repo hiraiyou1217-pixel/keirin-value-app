@@ -20,10 +20,7 @@ from race_analysis import (
     calculate_rider_indices,
 )
 from lineup_browser import fetch_lineup_browser
-from lineup_from_comments import (
-    infer_lineup_from_comments,
-    merge_dom_order_with_comment_groups,
-)
+from lineup_from_comments import infer_lineup_from_comments
 from auto_score import build_automatic_scores
 from race_catalog import fetch_race_catalog
 
@@ -34,7 +31,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.8.9：オッズ完全性優先版")
+st.caption("Ver.1.8.1：概算払戻明示版")
 
 
 def make_csv(
@@ -315,40 +312,25 @@ if catalog:
 
             # コメントから2車以上のラインを取得できた場合は
             # DOMの数字列解析より優先する。
-            merged_lineup_groups, merge_logs = (
-                merge_dom_order_with_comment_groups(
-                    dom_lineup_groups,
-                    comment_lineup_groups,
-                    rider_numbers_for_lineup,
-                )
-            )
-
-            meaningful_merged_groups = [
+            meaningful_comment_groups = [
                 group
-                for group in merged_lineup_groups
+                for group in comment_lineup_groups
                 if len(group) >= 2
             ]
 
-            if meaningful_merged_groups:
-                # 現在のDOM解析は数字の境界を保持できないため、
-                # 安全性を優先してコメント解析を採用する。
+            if meaningful_comment_groups:
                 lineup_groups = comment_lineup_groups
                 lineup_logs = (
                     dom_lineup_logs
                     + comment_lineup_logs
-                    + merge_logs
-                    + [
-                        "DOM統合結果は参考表示のみ",
-                        "採用並び: コメント解析",
-                    ]
+                    + ["採用並び: コメント解析"]
                 )
             else:
-                lineup_groups = comment_lineup_groups
+                lineup_groups = dom_lineup_groups
                 lineup_logs = (
                     dom_lineup_logs
                     + comment_lineup_logs
-                    + merge_logs
-                    + ["採用並び: コメント解析"]
+                    + ["採用並び: DOM解析"]
                 )
 
             st.session_state.lineup_groups = lineup_groups
@@ -517,108 +499,7 @@ if odds:
         )
 
     st.divider()
-# 確率モデルは専用フォームで確定する。
-# 選択操作だけではStreamlit全体を再実行しない。
-if "committed_model_mode" not in st.session_state:
-    st.session_state.committed_model_mode = "バランス型"
-
-model_mode_options = [
-    "的中率重視",
-    "バランス型",
-    "回収率重視",
-]
-
-current_model_index = model_mode_options.index(
-    st.session_state.committed_model_mode
-)
-
-with st.form(
-    "probability_model_selection_form",
-    clear_on_submit=False,
-    enter_to_submit=False,
-):
-    pending_model_mode = st.selectbox(
-        "確率モデルモード",
-        options=model_mode_options,
-        index=current_model_index,
-        help=(
-            "選択しただけでは再計算されません。"
-            "下の反映ボタンを押した時だけ設定を確定します。"
-        ),
-        key="pending_model_mode",
-    )
-
-    apply_model_mode = st.form_submit_button(
-        "確率モデル設定を反映"
-    )
-
-if apply_model_mode:
-    st.session_state.committed_model_mode = (
-        pending_model_mode
-    )
-
-    # 前回の計算結果を消し、異なるモデルの結果が
-    # 混在しないようにする。
-    st.session_state.expected_values = []
-    st.session_state.bet_plan = []
-    st.session_state.bet_plan_executed = False
-    st.session_state.bet_plan_message = ""
-    st.session_state.bet_plan_candidate_count = 0
-    st.session_state.calculation_logs = []
-
-    st.success(
-        "確率モデルを"
-        f"「{pending_model_mode}」へ変更しました。"
-        "次に一括実行ボタンを押してください。"
-    )
-
-model_mode = st.session_state.committed_model_mode
-
-st.caption(
-    f"現在適用中の確率モデル：{model_mode}"
-)
-
-with st.form(
-    "ev_settings_form",
-    clear_on_submit=False,
-):
     st.subheader("選手評価と期待値設定")
-
-    probability_col1, probability_col2 = st.columns(2)
-
-    with probability_col1:
-        market_blend = st.slider(
-            "市場確率の混合率",
-            min_value=0.0,
-            max_value=0.90,
-            value=float(
-                st.session_state.get(
-                    "market_blend_value",
-                    0.55,
-                )
-            ),
-            step=0.05,
-            key="market_blend_value",
-            help=(
-                "高いほど市場オッズに近づき、"
-                "極端な大穴評価を抑えます。"
-            ),
-        )
-
-    with probability_col2:
-        maximum_expected_return = st.number_input(
-            "期待回収率の計算上限",
-            min_value=1.0,
-            max_value=10.0,
-            value=float(
-                st.session_state.get(
-                    "maximum_expected_return_value",
-                    3.0,
-                )
-            ),
-            step=0.25,
-            key="maximum_expected_return_value",
-        )
 
     riders = extract_rider_numbers(odds)
 
@@ -627,22 +508,11 @@ with st.form(
         "絶対値より、選手間の点差が重要です。"
     )
 
+    score_columns = st.columns(
+        min(len(riders), 9)
+    )
+
     scores: dict[int, float] = {}
-
-    if not riders:
-        st.warning(
-            "選手データがありません。"
-            "先にメイン画面でオッズと出走表を取得してください。"
-        )
-
-        score_columns = []
-    else:
-        score_columns = st.columns(
-            max(
-                1,
-                min(len(riders), 9),
-            )
-        )
 
     for index, rider in enumerate(riders):
         with score_columns[index % len(score_columns)]:
@@ -703,6 +573,20 @@ with st.form(
                 st.caption(
                     " / ".join(details)
                 )
+
+    model_mode = st.selectbox(
+        "確率モデルモード",
+        options=[
+            "的中率重視",
+            "バランス型",
+            "回収率重視",
+        ],
+        index=1,
+        help=(
+            "的中率重視は上位評価とラインを強め、"
+            "回収率重視は確率差を抑えて穴候補を残します。"
+        ),
+    )
 
     settings_left, settings_middle, settings_right = (
         st.columns(3)
@@ -808,7 +692,7 @@ with st.form(
         ),
     )
 
-    if st.form_submit_button(
+    if st.button(
         "妙味期待値を計算",
         type="primary",
     ):
@@ -824,22 +708,7 @@ with st.form(
                 "rider_data",
                 [],
             ),
-            model_mode=st.session_state.get(
-                "committed_model_mode",
-                "バランス型",
-            ),
-            market_blend=float(
-                st.session_state.get(
-                    "market_blend_value",
-                    0.55,
-                )
-            ),
-            maximum_expected_return=float(
-                st.session_state.get(
-                    "maximum_expected_return_value",
-                    3.0,
-                )
-            ),
+            model_mode=model_mode,
             temperature=temperature,
             bankroll=int(bankroll),
             kelly_fraction=kelly_fraction,
@@ -1000,38 +869,6 @@ if expected_values:
             key="plan_maximum_ratio",
         )
 
-    filter_col1, filter_col2, filter_col3 = (
-        st.columns(3)
-    )
-
-    with filter_col1:
-        maximum_odds = st.number_input(
-            "最大対象オッズ",
-            min_value=10.0,
-            max_value=9999.9,
-            value=300.0,
-            step=10.0,
-        )
-
-    with filter_col2:
-        maximum_popularity = st.number_input(
-            "最大対象人気順位",
-            min_value=1,
-            max_value=504,
-            value=120,
-            step=10,
-        )
-
-    with filter_col3:
-        minimum_model_probability = st.number_input(
-            "最低モデル確率",
-            min_value=0.0001,
-            max_value=0.1000,
-            value=0.0010,
-            step=0.0005,
-            format="%.4f",
-        )
-
     with allocation_col4:
         minimum_unit = st.selectbox(
             "購入単位",
@@ -1132,15 +969,6 @@ if expected_values:
             minimum_unit=int(minimum_unit),
             maximum_bet_ratio=float(
                 maximum_bet_ratio
-            ),
-            maximum_odds=float(
-                maximum_odds
-            ),
-            maximum_popularity=int(
-                maximum_popularity
-            ),
-            minimum_model_probability=float(
-                minimum_model_probability
             ),
         )
 
@@ -1296,9 +1124,6 @@ if expected_values:
                     "取得時概算払戻": (
                         f"{int(row['取得時概算払戻']):,}円"
                     ),
-                    "的中時利益": (
-                        f"{int(row['的中時利益']):+,}円"
-                    ),
                     "期待利益": (
                         f"{float(row['期待利益']):+,.0f}円"
                     ),
@@ -1338,7 +1163,6 @@ if expected_values:
                     ),
                     "購入額": row["購入額"],
                     "取得時概算払戻": row["取得時概算払戻"],
-                    "的中時利益": row["的中時利益"],
                     "期待払戻": row["期待払戻"],
                     "期待利益": row["期待利益"],
                     "予算比率": round(
@@ -1370,7 +1194,6 @@ if expected_values:
                     "期待回収率",
                     "購入額",
                     "取得時概算払戻",
-                    "的中時利益",
                     "期待払戻",
                     "期待利益",
                     "予算比率",

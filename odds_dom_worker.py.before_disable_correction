@@ -1,4 +1,5 @@
 from __future__ import annotations
+from itertools import permutations
 
 import argparse
 import json
@@ -843,18 +844,128 @@ def fetch_all_odds(
     )
 
     #
-    # 安全性を優先し、推測による自動補正は行わない。
+    # 自動補正
     #
-    # 重複行や存在しない車番を別の不足組番へ
-    # 割り当てると、組番とオッズの対応が保証できない。
+    # 重複行に加え、存在しない車番で除外した行も
+    # 補正候補として利用する。
     #
-    if missing_combinations:
-        logs.append(
-            "推測自動補正: 無効"
+    correction_candidates: list[dict[str, Any]] = []
+    candidate_keys: set[tuple[int, float]] = set()
+
+    for candidate in (
+        duplicate_rows
+        + rejected_rows
+    ):
+        key = (
+            int(candidate.get("人気", 9999)),
+            float(candidate.get("オッズ", 0)),
         )
+
+        if key in candidate_keys:
+            continue
+
+        candidate_keys.add(key)
+        correction_candidates.append(candidate)
+
+    correction_candidates = sorted(
+        correction_candidates,
+        key=lambda row: int(
+            row.get("人気", 9999)
+        ),
+    )
+
+    def combination_distance(
+        source: str,
+        target: str,
+    ) -> int:
+        source_parts = source.split("-")
+        target_parts = target.split("-")
+
+        if (
+            len(source_parts) != 3
+            or len(target_parts) != 3
+        ):
+            return 99
+
+        return sum(
+            source_value != target_value
+            for source_value, target_value
+            in zip(source_parts, target_parts)
+        )
+
+    if (
+        missing_combinations
+        and correction_candidates
+        and len(missing_combinations)
+        == len(correction_candidates)
+    ):
+        #
+        # 全割り当てを比較し、元の誤解析組番との差が
+        # 最も小さい組み合わせを採用する。
+        #
+        best_assignment = None
+        best_score = None
+
+        for assignment in permutations(
+            missing_combinations
+        ):
+            score = sum(
+                combination_distance(
+                    str(candidate.get("組番", "")),
+                    target,
+                )
+                for candidate, target
+                in zip(
+                    correction_candidates,
+                    assignment,
+                )
+            )
+
+            if (
+                best_score is None
+                or score < best_score
+            ):
+                best_score = score
+                best_assignment = assignment
+
+        if best_assignment is not None:
+            for candidate, missing_combo in zip(
+                correction_candidates,
+                best_assignment,
+            ):
+                corrected = {
+                    "組番": missing_combo,
+                    "オッズ": float(
+                        candidate["オッズ"]
+                    ),
+                    "人気": int(
+                        candidate["人気"]
+                    ),
+                }
+
+                all_rows[missing_combo] = corrected
+
+                logs.append(
+                    "自動補正（最小差分）: "
+                    f"人気{candidate['人気']} "
+                    f"{candidate['組番']} "
+                    f"→ {missing_combo} "
+                    f"オッズ={candidate['オッズ']}"
+                )
+
+            acquired_combinations = set(
+                all_rows.keys()
+            )
+
+            missing_combinations = sorted(
+                expected_combinations
+                - acquired_combinations
+            )
+    elif missing_combinations:
         logs.append(
-            "取得失敗: "
-            f"{len(missing_combinations)}組番不足"
+            "自動補正保留: "
+            f"不足組番={len(missing_combinations)}件 "
+            f"補正候補={len(correction_candidates)}件"
         )
 
     result = sorted(
@@ -931,27 +1042,15 @@ def fetch_all_odds(
             + "、".join(str(rank) for rank in missing_ranks)
         )
 
-    odds_data_complete = (
-        bool(expected_combinations)
+    if (
+        expected_combinations
         and len(result) == len(expected_combinations)
         and not missing_combinations
         and not duplicate_ranks
         and not missing_ranks
-        and not duplicate_rows
-        and not rejected_rows
-    )
-
-    if odds_data_complete:
+    ):
         logs.append(
             "オッズデータ完全性: OK"
-        )
-    else:
-        logs.append(
-            "オッズデータ完全性: NG"
-        )
-        logs.append(
-            "不完全なオッズデータは"
-            "期待値計算へ使用しません。"
         )
 
     return result, logs
@@ -979,28 +1078,11 @@ def main() -> int:
             arguments.racecard_url
         )
 
-        odds_data_complete = any(
-            log == "オッズデータ完全性: OK"
-            for log in logs
-        )
-
-        if odds_data_complete:
-            payload = {
-                "success": True,
-                "rows": rows,
-                "logs": logs,
-            }
-        else:
-            payload = {
-                "success": False,
-                "rows": [],
-                "logs": logs
-                + [
-                    "オッズ取得が不完全なため、"
-                    "計算処理を中止しました。",
-                    "同じレースを再取得してください。",
-                ],
-            }
+        payload = {
+            "success": True,
+            "rows": rows,
+            "logs": logs,
+        }
 
     except Exception as exc:
         payload = {

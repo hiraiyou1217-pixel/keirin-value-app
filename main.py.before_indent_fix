@@ -34,7 +34,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.8.9：オッズ完全性優先版")
+st.caption("Ver.1.8.6：モデル選択安定化版")
 
 
 def make_csv(
@@ -330,17 +330,12 @@ if catalog:
             ]
 
             if meaningful_merged_groups:
-                # 現在のDOM解析は数字の境界を保持できないため、
-                # 安全性を優先してコメント解析を採用する。
-                lineup_groups = comment_lineup_groups
+                lineup_groups = merged_lineup_groups
                 lineup_logs = (
                     dom_lineup_logs
                     + comment_lineup_logs
                     + merge_logs
-                    + [
-                        "DOM統合結果は参考表示のみ",
-                        "採用並び: コメント解析",
-                    ]
+                    + ["採用並び: DOM順＋コメント連携"]
                 )
             else:
                 lineup_groups = comment_lineup_groups
@@ -535,7 +530,6 @@ current_model_index = model_mode_options.index(
 with st.form(
     "probability_model_selection_form",
     clear_on_submit=False,
-    enter_to_submit=False,
 ):
     pending_model_mode = st.selectbox(
         "確率モデルモード",
@@ -578,47 +572,8 @@ st.caption(
     f"現在適用中の確率モデル：{model_mode}"
 )
 
-with st.form(
-    "ev_settings_form",
-    clear_on_submit=False,
-):
+
     st.subheader("選手評価と期待値設定")
-
-    probability_col1, probability_col2 = st.columns(2)
-
-    with probability_col1:
-        market_blend = st.slider(
-            "市場確率の混合率",
-            min_value=0.0,
-            max_value=0.90,
-            value=float(
-                st.session_state.get(
-                    "market_blend_value",
-                    0.55,
-                )
-            ),
-            step=0.05,
-            key="market_blend_value",
-            help=(
-                "高いほど市場オッズに近づき、"
-                "極端な大穴評価を抑えます。"
-            ),
-        )
-
-    with probability_col2:
-        maximum_expected_return = st.number_input(
-            "期待回収率の計算上限",
-            min_value=1.0,
-            max_value=10.0,
-            value=float(
-                st.session_state.get(
-                    "maximum_expected_return_value",
-                    3.0,
-                )
-            ),
-            step=0.25,
-            key="maximum_expected_return_value",
-        )
 
     riders = extract_rider_numbers(odds)
 
@@ -627,22 +582,11 @@ with st.form(
         "絶対値より、選手間の点差が重要です。"
     )
 
+    score_columns = st.columns(
+        min(len(riders), 9)
+    )
+
     scores: dict[int, float] = {}
-
-    if not riders:
-        st.warning(
-            "選手データがありません。"
-            "先にメイン画面でオッズと出走表を取得してください。"
-        )
-
-        score_columns = []
-    else:
-        score_columns = st.columns(
-            max(
-                1,
-                min(len(riders), 9),
-            )
-        )
 
     for index, rider in enumerate(riders):
         with score_columns[index % len(score_columns)]:
@@ -808,7 +752,7 @@ with st.form(
         ),
     )
 
-    if st.form_submit_button(
+    if st.button(
         "妙味期待値を計算",
         type="primary",
     ):
@@ -828,17 +772,9 @@ with st.form(
                 "committed_model_mode",
                 "バランス型",
             ),
-            market_blend=float(
-                st.session_state.get(
-                    "market_blend_value",
-                    0.55,
-                )
-            ),
-            maximum_expected_return=float(
-                st.session_state.get(
-                    "maximum_expected_return_value",
-                    3.0,
-                )
+            market_blend=market_blend,
+            maximum_expected_return=(
+                maximum_expected_return
             ),
             temperature=temperature,
             bankroll=int(bankroll),

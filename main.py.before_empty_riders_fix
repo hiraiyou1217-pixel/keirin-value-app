@@ -627,22 +627,11 @@ with st.form(
         "絶対値より、選手間の点差が重要です。"
     )
 
+    score_columns = st.columns(
+        min(len(riders), 9)
+    )
+
     scores: dict[int, float] = {}
-
-    if not riders:
-        st.warning(
-            "選手データがありません。"
-            "先にメイン画面でオッズと出走表を取得してください。"
-        )
-
-        score_columns = []
-    else:
-        score_columns = st.columns(
-            max(
-                1,
-                min(len(riders), 9),
-            )
-        )
 
     for index, rider in enumerate(riders):
         with score_columns[index % len(score_columns)]:
