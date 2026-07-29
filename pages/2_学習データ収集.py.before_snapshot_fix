@@ -4,13 +4,7 @@ from datetime import date
 from typing import Any
 
 import streamlit as st
-from current_race_snapshot import (
-    load_current_race_snapshot,
-)
 
-from result_auto_import import (
-    import_unfinished_results,
-)
 from learning_database import (
     DATABASE_PATH,
     get_database_summary,
@@ -73,15 +67,9 @@ st.info(
 st.divider()
 st.subheader("現在取得中のレースを保存")
 
-snapshot = load_current_race_snapshot()
-
 odds_rows: list[dict[str, Any]] = (
     st.session_state.get("odds", [])
     or st.session_state.get(
-        "odds_rows",
-        [],
-    )
-    or snapshot.get(
         "odds_rows",
         [],
     )
@@ -92,10 +80,6 @@ riders: list[dict[str, Any]] = (
         "rider_data",
         [],
     )
-    or snapshot.get(
-        "riders",
-        [],
-    )
 )
 
 lineup_groups: list[list[int]] = (
@@ -103,18 +87,10 @@ lineup_groups: list[list[int]] = (
         "lineup_groups",
         [],
     )
-    or snapshot.get(
-        "lineup_groups",
-        [],
-    )
 )
 
 odds_logs: list[str] = (
     st.session_state.get(
-        "odds_logs",
-        [],
-    )
-    or snapshot.get(
         "odds_logs",
         [],
     )
@@ -279,135 +255,6 @@ if save_snapshot:
         )
 
         st.code(race_id)
-
-
-st.divider()
-st.subheader("未確定レースの結果を自動取得")
-
-st.caption(
-    "結果未登録のレースを順番に確認し、"
-    "確定済みの着順と3連単払戻を"
-    "SQLiteへ登録します。"
-)
-
-with st.form(
-    "automatic_result_import_form",
-    clear_on_submit=False,
-    enter_to_submit=False,
-):
-    maximum_result_checks = st.number_input(
-        "1回に確認する最大レース数",
-        min_value=1,
-        max_value=200,
-        value=30,
-        step=10,
-    )
-
-    automatic_result_import = (
-        st.form_submit_button(
-            "未確定レースの結果を一括取得",
-            type="primary",
-        )
-    )
-
-if automatic_result_import:
-    try:
-        with st.spinner(
-            "未確定レースの結果を"
-            "確認しています。"
-        ):
-            import_result = (
-                import_unfinished_results(
-                    maximum_races=int(
-                        maximum_result_checks
-                    )
-                )
-            )
-
-        st.session_state[
-            "automatic_result_import"
-        ] = import_result
-
-        st.success(
-            "結果確認が完了しました。"
-        )
-
-    except Exception as exc:
-        st.error(
-            f"{type(exc).__name__}: {exc}"
-        )
-
-import_result = st.session_state.get(
-    "automatic_result_import"
-)
-
-if import_result:
-    result_col1, result_col2, result_col3, result_col4 = (
-        st.columns(4)
-    )
-
-    with result_col1:
-        st.metric(
-            "確認",
-            import_result["checked"],
-        )
-
-    with result_col2:
-        st.metric(
-            "登録",
-            import_result["registered"],
-        )
-
-    with result_col3:
-        st.metric(
-            "未確定",
-            import_result["unsettled"],
-        )
-
-    with result_col4:
-        st.metric(
-            "取得失敗",
-            import_result["failed"],
-        )
-
-    detail_rows = []
-
-    for detail in import_result[
-        "details"
-    ]:
-        detail_rows.append(
-            {
-                "開催日": detail[
-                    "race_date"
-                ],
-                "競輪場": detail[
-                    "venue"
-                ],
-                "R": detail[
-                    "race_number"
-                ],
-                "状態": detail[
-                    "status"
-                ],
-                "確定組番": detail[
-                    "winning_combination"
-                ],
-                "払戻": detail[
-                    "payout_per_100"
-                ]
-                or "",
-                "メッセージ": detail[
-                    "message"
-                ],
-            }
-        )
-
-    st.dataframe(
-        detail_rows,
-        use_container_width=True,
-        hide_index=True,
-    )
-
 
 st.divider()
 st.subheader("レース結果を登録")

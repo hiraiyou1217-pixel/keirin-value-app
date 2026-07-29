@@ -5,9 +5,6 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
-from current_race_snapshot import (
-    load_current_race_snapshot,
-)
 
 from learned_model_prediction import (
     predict_current_race,
@@ -36,15 +33,9 @@ if not MODEL_PATH.exists():
     )
     st.stop()
 
-snapshot = load_current_race_snapshot()
-
 odds_rows: list[dict[str, Any]] = (
     st.session_state.get("odds", [])
     or st.session_state.get(
-        "odds_rows",
-        [],
-    )
-    or snapshot.get(
         "odds_rows",
         [],
     )
@@ -55,10 +46,6 @@ riders: list[dict[str, Any]] = (
         "rider_data",
         [],
     )
-    or snapshot.get(
-        "riders",
-        [],
-    )
 )
 
 lineup_groups: list[list[int]] = (
@@ -66,18 +53,10 @@ lineup_groups: list[list[int]] = (
         "lineup_groups",
         [],
     )
-    or snapshot.get(
-        "lineup_groups",
-        [],
-    )
 )
 
 odds_logs: list[str] = (
     st.session_state.get(
-        "odds_logs",
-        [],
-    )
-    or snapshot.get(
         "odds_logs",
         [],
     )

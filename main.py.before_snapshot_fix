@@ -6,9 +6,6 @@ from html import escape
 from io import StringIO
 
 import streamlit as st
-from current_race_snapshot import (
-    save_current_race_snapshot,
-)
 
 from odds_browser import fetch_all_trifecta_odds_browser
 from advanced_probability_model import calculate_expected_values_v2
@@ -585,81 +582,6 @@ with st.form(
     "ev_settings_form",
     clear_on_submit=False,
 ):
-
-    # ページ移動後も取得データを利用できるよう、
-    # 現在レースをJSONへ保存する。
-    snapshot_odds = (
-        st.session_state.get("odds", [])
-        or st.session_state.get(
-            "odds_rows",
-            [],
-        )
-    )
-
-    snapshot_riders = (
-        st.session_state.get(
-            "rider_data",
-            [],
-        )
-    )
-
-    snapshot_lineup = (
-        st.session_state.get(
-            "lineup_groups",
-            [],
-        )
-    )
-
-    snapshot_odds_logs = (
-        st.session_state.get(
-            "odds_logs",
-            [],
-        )
-    )
-
-    if snapshot_riders:
-        try:
-            save_current_race_snapshot(
-                odds_rows=snapshot_odds,
-                riders=snapshot_riders,
-                lineup_groups=snapshot_lineup,
-                odds_logs=snapshot_odds_logs,
-                race_date=st.session_state.get(
-                    "selected_date",
-                    "",
-                ),
-                venue=st.session_state.get(
-                    "venue",
-                    st.session_state.get(
-                        "selected_venue",
-                        "",
-                    ),
-                ),
-                race_number=st.session_state.get(
-                    "race_number",
-                    st.session_state.get(
-                        "selected_race_number",
-                        0,
-                    ),
-                ),
-                race_url=st.session_state.get(
-                    "racecard_url",
-                    st.session_state.get(
-                        "selected_race_url",
-                        "",
-                    ),
-                ),
-                race_title=st.session_state.get(
-                    "race_title",
-                    "",
-                ),
-            )
-        except Exception as snapshot_error:
-            st.session_state[
-                "snapshot_save_error"
-            ] = str(snapshot_error)
-
-
     st.subheader("選手評価と期待値設定")
 
     probability_col1, probability_col2 = st.columns(2)

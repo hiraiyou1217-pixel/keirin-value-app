@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import json
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+
+SNAPSHOT_PATH = (
+    Path(__file__).resolve().parent
+    / "data"
+    / "current_race_snapshot.json"
+)
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None:
+        return None
+
+    if isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, (list, tuple, set)):
+        return [
+            _json_safe(item)
+            for item in value
+        ]
+
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+
+    return str(value)
+
+
+def save_current_race_snapshot(
+    *,
+    odds_rows: list[dict[str, Any]],
+    riders: list[dict[str, Any]],
+    lineup_groups: list[list[int]],
+    odds_logs: list[str],
+    race_date: Any = "",
+    venue: str = "",
+    race_number: int = 0,
+    race_url: str = "",
+    race_title: str = "",
+) -> None:
+    SNAPSHOT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    odds_complete = any(
+        str(log).strip()
+        == "オッズデータ完全性: OK"
+        for log in odds_logs
+    )
+
+    payload = {
+        "saved_at": datetime.now().isoformat(
+            timespec="seconds"
+        ),
+        "race_date": _json_safe(race_date),
+        "venue": str(venue),
+        "race_number": int(race_number or 0),
+        "race_url": str(race_url),
+        "race_title": str(race_title),
+        "odds_rows": _json_safe(odds_rows),
+        "riders": _json_safe(riders),
+        "lineup_groups": _json_safe(
+            lineup_groups
+        ),
+        "odds_logs": _json_safe(odds_logs),
+        "odds_complete": odds_complete,
+    }
+
+    temporary_path = SNAPSHOT_PATH.with_suffix(
+        ".json.tmp"
+    )
+
+    temporary_path.write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    temporary_path.replace(SNAPSHOT_PATH)
+
+
+def load_current_race_snapshot() -> dict[str, Any]:
+    if not SNAPSHOT_PATH.exists():
+        return {}
+
+    try:
+        payload = json.loads(
+            SNAPSHOT_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+    except (
+        json.JSONDecodeError,
+        OSError,
+    ):
+        return {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    return payload
