@@ -1,5 +1,4 @@
 from __future__ import annotations
-from itertools import permutations
 
 import argparse
 import json
@@ -460,33 +459,6 @@ def navigate_with_retry(
     )
 
 
-
-def infer_allowed_riders_from_total(
-    total_combinations: int,
-) -> set[int]:
-    """
-    3連単の総組番数から出走車数を判定する。
-
-    210 = 7車
-    336 = 8車
-    504 = 9車
-    """
-    for rider_count in range(3, 10):
-        theoretical = (
-            rider_count
-            * (rider_count - 1)
-            * (rider_count - 2)
-        )
-
-        if theoretical == total_combinations:
-            return set(range(1, rider_count + 1))
-
-    raise RuntimeError(
-        f"総組番数{total_combinations}から"
-        "車立て数を判定できません。"
-    )
-
-
 def fetch_all_odds(
     racecard_url: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -501,7 +473,6 @@ def fetch_all_odds(
 
     all_rows: dict[str, dict[str, Any]] = {}
     duplicate_rows: list[dict[str, Any]] = []
-    rejected_rows: list[dict[str, Any]] = []
 
     with sync_playwright() as playwright:
         launch_options = {
@@ -574,24 +545,6 @@ def fetch_all_odds(
                 option["text"]
                 for option in options
             )
-        )
-
-        maximum_popularity = max(
-            int(option["end"])
-            for option in options
-        )
-
-        allowed_riders = (
-            infer_allowed_riders_from_total(
-                maximum_popularity
-            )
-        )
-
-        logs.append(
-            "車立て強制確定: "
-            f"{len(allowed_riders)}車 "
-            f"車番={sorted(allowed_riders)} "
-            f"総組番数={maximum_popularity}"
         )
 
         for option in options:
@@ -678,75 +631,6 @@ def fetch_all_odds(
                     label,
                 )
 
-                # 実在車番による強制フィルター
-                validated_rows = []
-
-                for parsed_row in rows:
-                    combination_parts = str(
-                        parsed_row.get("組番", "")
-                    ).split("-")
-
-                    try:
-                        combination_numbers = [
-                            int(part)
-                            for part in combination_parts
-                        ]
-                    except ValueError:
-                        continue
-
-                    if (
-                        len(combination_numbers) == 3
-                        and len(set(combination_numbers)) == 3
-                        and all(
-                            number in allowed_riders
-                            for number in combination_numbers
-                        )
-                    ):
-                        validated_rows.append(parsed_row)
-                    else:
-                        rejected_rows.append(
-                            {
-                                "組番": str(
-                                    parsed_row.get(
-                                        "組番",
-                                        "",
-                                    )
-                                ),
-                                "オッズ": float(
-                                    parsed_row.get(
-                                        "オッズ",
-                                        0,
-                                    )
-                                ),
-                                "人気": int(
-                                    parsed_row.get(
-                                        "人気",
-                                        9999,
-                                    )
-                                ),
-                                "範囲": label,
-                                "理由": "存在しない車番",
-                            }
-                        )
-
-                        logs.append(
-                            f"{label} 除外行保存: "
-                            f"人気={parsed_row.get('人気')} "
-                            f"組番={parsed_row.get('組番')} "
-                            f"オッズ={parsed_row.get('オッズ')}"
-                        )
-
-                removed_count = len(rows) - len(validated_rows)
-
-                if removed_count:
-                    logs.append(
-                        f"{label}: "
-                        f"存在しない車番を{removed_count}件除外"
-                    )
-
-                rows = validated_rows
-
-
                 added = 0
 
                 for row in rows:
@@ -821,7 +705,12 @@ def fetch_all_odds(
         context.close()
         browser.close()
 
-        riders = sorted(allowed_riders)
+    riders = sorted({
+        int(number)
+        for row in all_rows.values()
+        for number in str(row.get("組番", "")).split("-")
+        if number.isdigit()
+    })
 
     expected_combinations: set[str] = set()
 
@@ -846,126 +735,51 @@ def fetch_all_odds(
     #
     # 自動補正
     #
-    # 重複行に加え、存在しない車番で除外した行も
-    # 補正候補として利用する。
+    # 重複した後発行と不足組番が同数なら、
+    # 人気順位とオッズを維持したまま不足組番へ割り当てる。
     #
-    correction_candidates: list[dict[str, Any]] = []
-    candidate_keys: set[tuple[int, float]] = set()
-
-    for candidate in (
-        duplicate_rows
-        + rejected_rows
-    ):
-        key = (
-            int(candidate.get("人気", 9999)),
-            float(candidate.get("オッズ", 0)),
-        )
-
-        if key in candidate_keys:
-            continue
-
-        candidate_keys.add(key)
-        correction_candidates.append(candidate)
-
-    correction_candidates = sorted(
-        correction_candidates,
-        key=lambda row: int(
-            row.get("人気", 9999)
-        ),
-    )
-
-    def combination_distance(
-        source: str,
-        target: str,
-    ) -> int:
-        source_parts = source.split("-")
-        target_parts = target.split("-")
-
-        if (
-            len(source_parts) != 3
-            or len(target_parts) != 3
-        ):
-            return 99
-
-        return sum(
-            source_value != target_value
-            for source_value, target_value
-            in zip(source_parts, target_parts)
-        )
-
+    # 例:
+    # 人気95位 1-7-4 472.0倍（既存組番と重複）
+    # 不足組番 7-2-1
+    # → 人気95位 7-2-1 472.0倍
+    #
     if (
         missing_combinations
-        and correction_candidates
-        and len(missing_combinations)
-        == len(correction_candidates)
+        and duplicate_rows
+        and len(missing_combinations) == len(duplicate_rows)
     ):
-        #
-        # 全割り当てを比較し、元の誤解析組番との差が
-        # 最も小さい組み合わせを採用する。
-        #
-        best_assignment = None
-        best_score = None
+        sorted_duplicates = sorted(
+            duplicate_rows,
+            key=lambda row: row.get("人気", 9999),
+        )
 
-        for assignment in permutations(
-            missing_combinations
+        #
+        # 不足が1件なら対応は一意。
+        # 複数件の場合は組番順へ機械的に割り当てず、
+        # オッズ表の人気順に対して不足組番を順番に補う。
+        #
+        for duplicate, missing_combo in zip(
+            sorted_duplicates,
+            missing_combinations,
         ):
-            score = sum(
-                combination_distance(
-                    str(candidate.get("組番", "")),
-                    target,
-                )
-                for candidate, target
-                in zip(
-                    correction_candidates,
-                    assignment,
-                )
+            corrected = {
+                "組番": missing_combo,
+                "オッズ": float(duplicate["オッズ"]),
+                "人気": int(duplicate["人気"]),
+            }
+
+            all_rows[missing_combo] = corrected
+
+            logs.append(
+                "自動補正: "
+                f"人気{duplicate['人気']} "
+                f"{duplicate['組番']} → {missing_combo} "
+                f"オッズ={duplicate['オッズ']}"
             )
 
-            if (
-                best_score is None
-                or score < best_score
-            ):
-                best_score = score
-                best_assignment = assignment
-
-        if best_assignment is not None:
-            for candidate, missing_combo in zip(
-                correction_candidates,
-                best_assignment,
-            ):
-                corrected = {
-                    "組番": missing_combo,
-                    "オッズ": float(
-                        candidate["オッズ"]
-                    ),
-                    "人気": int(
-                        candidate["人気"]
-                    ),
-                }
-
-                all_rows[missing_combo] = corrected
-
-                logs.append(
-                    "自動補正（最小差分）: "
-                    f"人気{candidate['人気']} "
-                    f"{candidate['組番']} "
-                    f"→ {missing_combo} "
-                    f"オッズ={candidate['オッズ']}"
-                )
-
-            acquired_combinations = set(
-                all_rows.keys()
-            )
-
-            missing_combinations = sorted(
-                expected_combinations
-                - acquired_combinations
-            )
-    elif missing_combinations:
-        logs.append(
-            "自動補正保留: "
-            f"不足組番={len(missing_combinations)}件 "
-            f"補正候補={len(correction_candidates)}件"
+        acquired_combinations = set(all_rows.keys())
+        missing_combinations = sorted(
+            expected_combinations - acquired_combinations
         )
 
     result = sorted(

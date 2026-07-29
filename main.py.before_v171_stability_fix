@@ -30,7 +30,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.7.5：欠損行統合補正版")
+st.caption("Ver.1.7：展開指数・購入理由版")
 
 
 def make_csv(
@@ -437,64 +437,10 @@ if odds:
                 }
             )
 
-        index_table_rows = []
-
-        for item in index_rows:
-            index_table_rows.append(
-                f"""
-                <tr>
-                    <td>{item["車番"]}</td>
-                    <td>{escape(str(item["選手名"]))}</td>
-                    <td>{escape(str(item["AI印"]))}</td>
-                    <td>{escape(str(item["ライン"]))}</td>
-                    <td>{escape(str(item["位置"]))}</td>
-                    <td>{item["競走得点順位"]}</td>
-                    <td>{float(item["先行指数"]):.1f}</td>
-                    <td>{float(item["捲り指数"]):.1f}</td>
-                    <td>{float(item["追込指数"]):.1f}</td>
-                </tr>
-                """
-            )
-
-        index_table_html = f"""
-        <div style="
-            max-height:480px;
-            overflow:auto;
-            border:1px solid #ddd;
-            border-radius:4px;
-        ">
-            <table style="
-                width:100%;
-                border-collapse:collapse;
-                font-size:14px;
-            ">
-                <thead>
-                    <tr style="
-                        position:sticky;
-                        top:0;
-                        background:#f5f5f5;
-                    ">
-                        <th style="padding:8px;">車番</th>
-                        <th style="padding:8px;">選手名</th>
-                        <th style="padding:8px;">AI印</th>
-                        <th style="padding:8px;">ライン</th>
-                        <th style="padding:8px;">位置</th>
-                        <th style="padding:8px;">競走得点順位</th>
-                        <th style="padding:8px;">先行指数</th>
-                        <th style="padding:8px;">捲り指数</th>
-                        <th style="padding:8px;">追込指数</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {''.join(index_table_rows)}
-                </tbody>
-            </table>
-        </div>
-        """
-
-        st.markdown(
-            index_table_html,
-            unsafe_allow_html=True,
+        st.dataframe(
+            index_rows,
+            use_container_width=True,
+            hide_index=True,
         )
 
     st.divider()
