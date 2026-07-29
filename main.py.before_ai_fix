@@ -14,10 +14,6 @@ from probability_model import (
     extract_rider_numbers,
 )
 from racecard_browser import fetch_racecard_data_browser
-from race_analysis import (
-    build_bet_reasons,
-    calculate_rider_indices,
-)
 from lineup_browser import fetch_lineup_browser
 from lineup_from_comments import infer_lineup_from_comments
 from auto_score import build_automatic_scores
@@ -30,7 +26,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.7：展開指数・購入理由版")
+st.caption("Ver.1.5.5：買い目一覧表示修正版")
 
 
 def make_csv(
@@ -259,9 +255,6 @@ if catalog:
         "3連単オッズを取得",
         type="primary",
     ):
-        st.session_state.rider_data = []
-        st.session_state.rider_logs = []
-        st.session_state.automatic_scores = {}
         try:
             with st.spinner(
                 "全3連単オッズを取得しています"
@@ -370,80 +363,6 @@ if odds:
     )
 
     st.divider()
-    st.subheader("展開指数")
-
-    current_lineup_groups = (
-        st.session_state.get(
-            "lineup_groups",
-            [],
-        )
-    )
-
-    rider_indices_for_display = (
-        calculate_rider_indices(
-            st.session_state.rider_data,
-            current_lineup_groups,
-        )
-    )
-
-    if rider_indices_for_display:
-        index_rows = []
-
-        for number in sorted(
-            rider_indices_for_display
-        ):
-            item = rider_indices_for_display[
-                number
-            ]
-
-            position = int(
-                item.get(
-                    "ライン位置",
-                    0,
-                )
-            )
-
-            if int(
-                item.get(
-                    "ライン長",
-                    1,
-                )
-            ) <= 1:
-                position_name = "単騎"
-            elif position == 0:
-                position_name = "先頭"
-            elif position == 1:
-                position_name = "番手"
-            elif position == 2:
-                position_name = "3番手"
-            else:
-                position_name = (
-                    f"{position + 1}番手"
-                )
-
-            index_rows.append(
-                {
-                    "車番": number,
-                    "選手名": item["選手名"],
-                    "AI印": item["AI印"],
-                    "ライン": item["ライン"],
-                    "位置": position_name,
-                    "競走得点順位": (
-                        item["競走得点順位"]
-                    ),
-                    "先行指数": item["先行指数"],
-                    "捲り指数": item["捲り指数"],
-                    "追込指数": item["追込指数"],
-                }
-            )
-
-        st.dataframe(
-            index_rows,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-    st.divider()
     st.subheader("選手評価と期待値設定")
 
     riders = extract_rider_numbers(odds)
@@ -500,7 +419,6 @@ if odds:
             details = []
 
             for key in (
-                "AI印",
                 "競走得点",
                 "脚質",
                 "B",
@@ -650,17 +568,6 @@ if odds:
             second_third_bonus=(
                 second_third_bonus
             ),
-        )
-
-        rider_indices = calculate_rider_indices(
-            st.session_state.rider_data,
-            lineup_groups,
-        )
-
-        results = build_bet_reasons(
-            results,
-            rider_indices,
-            lineup_groups,
         )
 
         st.session_state.expected_values = results
@@ -870,17 +777,6 @@ if expected_values:
             )
         )
 
-        rider_indices = calculate_rider_indices(
-            st.session_state.rider_data,
-            lineup_groups_for_plan,
-        )
-
-        calculated_results = build_bet_reasons(
-            calculated_results,
-            rider_indices,
-            lineup_groups_for_plan,
-        )
-
         st.session_state.expected_values = (
             calculated_results
         )
@@ -1056,12 +952,6 @@ if expected_values:
                     "予算比率": (
                         f"{float(row['予算比率']) * 100:.1f}%"
                     ),
-                    "購入理由": str(
-                        row.get(
-                            "購入理由",
-                            "",
-                        )
-                    ),
                 }
             )
 
@@ -1095,10 +985,6 @@ if expected_values:
                         row["予算比率"],
                         4,
                     ),
-                    "購入理由": row.get(
-                        "購入理由",
-                        "",
-                    ),
                 }
             )
 
@@ -1117,7 +1003,6 @@ if expected_values:
                     "期待払戻",
                     "期待利益",
                     "予算比率",
-                    "購入理由",
                 ],
             ),
             file_name=(

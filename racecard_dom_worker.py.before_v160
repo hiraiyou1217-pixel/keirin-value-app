@@ -253,10 +253,6 @@ def fetch_racecard_data(
             headers,
             ("選手名",),
         )
-        ai_index = find_column(
-            headers,
-            ("AI",),
-        )
         score_index = find_column(
             headers,
             ("競走得点",),
@@ -294,7 +290,6 @@ def fetch_racecard_data(
             "列位置: "
             f"車={car_index} "
             f"選手名={name_index} "
-            f"AI={ai_index} "
             f"競走得点={score_index} "
             f"S={s_index} "
             f"H={h_index} "
@@ -420,10 +415,6 @@ def fetch_racecard_data(
                 "車番": car_number,
                 "選手名": clean_name(name_text)
                 or f"{car_number}番車",
-                "AI印": cell_value(
-                    cells,
-                    ai_index,
-                ),
                 "競走得点": competition_score,
                 "脚質": style,
                 "S": parse_integer(
@@ -480,7 +471,6 @@ def fetch_racecard_data(
         logs.append(
             f"{rider['車番']}番 "
             f"{rider['選手名']} "
-            f"AI印={rider.get('AI印', '')} "
             f"競走得点={rider['競走得点']} "
             f"脚質={rider['脚質']} "
             f"B={rider['B']} "
