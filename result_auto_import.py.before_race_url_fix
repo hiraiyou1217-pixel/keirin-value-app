@@ -57,28 +57,6 @@ def import_unfinished_results(
 
         summary["checked"] += 1
 
-        saved_race_url = str(
-            race.get(
-                "race_url",
-                "",
-            )
-            or ""
-        ).strip()
-
-        if not saved_race_url:
-            detail["status"] = "url_missing"
-            detail["message"] = (
-                "出走表URLが未登録です。"
-                "学習データ収集ページから"
-                "URLを登録してください。"
-            )
-
-            summary["failed"] += 1
-            summary["details"].append(
-                detail
-            )
-            continue
-
         if not valid_car_numbers:
             detail["status"] = "failed"
             detail["message"] = (
@@ -92,7 +70,12 @@ def import_unfinished_results(
             continue
 
         result, logs = fetch_race_result(
-            race_url=saved_race_url,
+            race_url=str(
+                race.get(
+                    "race_url",
+                    "",
+                )
+            ),
             valid_car_numbers=(
                 valid_car_numbers
             ),

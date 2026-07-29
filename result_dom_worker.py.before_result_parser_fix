@@ -89,87 +89,109 @@ def extract_finish_order_from_tables(
     page: Any,
     valid_cars: set[int],
 ) -> list[int]:
-    """
-    「着 | 車 | 選手名」の結果表を列名で判定して取得する。
-    """
     tables = page.locator("table")
 
-    for table_index in range(tables.count()):
+    for table_index in range(
+        tables.count()
+    ):
         table = tables.nth(table_index)
 
         try:
-            rows = table.locator("tr")
-
-            if rows.count() < 4:
-                continue
-
-            header_cells = [
-                normalize_text(value)
-                for value in rows.nth(0)
-                .locator("th, td")
-                .all_inner_texts()
-            ]
+            table_text = normalize_text(
+                table.inner_text(
+                    timeout=3_000
+                )
+            )
         except Exception:
             continue
 
-        normalized_headers = [
-            value.replace("\n", "")
-            for value in header_cells
-        ]
-
-        try:
-            position_index = next(
-                index
-                for index, value
-                in enumerate(normalized_headers)
-                if value in ("着", "着順", "順位")
+        if not any(
+            keyword in table_text
+            for keyword in (
+                "着",
+                "順位",
+                "車",
+                "選手名",
             )
-
-            car_index = next(
-                index
-                for index, value
-                in enumerate(normalized_headers)
-                if value in ("車", "車番")
-            )
-        except StopIteration:
+        ):
             continue
 
-        order_map: dict[int, int] = {}
+        rows = table.locator("tr")
+        detected: list[tuple[int, int]] = []
 
-        for row_index in range(1, rows.count()):
+        for row_index in range(
+            rows.count()
+        ):
+            row = rows.nth(row_index)
+
             try:
                 cells = [
                     normalize_text(value)
-                    for value in rows.nth(row_index)
-                    .locator("th, td")
-                    .all_inner_texts()
+                    for value in row.locator(
+                        "th, td"
+                    ).all_inner_texts()
                 ]
             except Exception:
                 continue
 
-            if (
-                position_index >= len(cells)
-                or car_index >= len(cells)
-            ):
+            if len(cells) < 2:
                 continue
 
-            position = parse_integer(
-                cells[position_index]
-            )
+            position = None
+            car_number = None
 
-            car_number = parse_integer(
-                cells[car_index]
-            )
+            for cell in cells[:4]:
+                match = re.fullmatch(
+                    r"([1-9])着",
+                    cell,
+                )
+
+                if match:
+                    position = int(
+                        match.group(1)
+                    )
+                    break
+
+            if position is None:
+                first_value = parse_integer(
+                    cells[0]
+                )
+
+                if first_value in (
+                    1,
+                    2,
+                    3,
+                ):
+                    position = first_value
+
+            for cell in cells[:6]:
+                number = parse_integer(cell)
+
+                if number in valid_cars:
+                    if number != position:
+                        car_number = number
+                        break
 
             if (
                 position in (1, 2, 3)
                 and car_number in valid_cars
             ):
-                order_map[position] = car_number
+                detected.append(
+                    (position, car_number)
+                )
+
+        order_map = {
+            position: car
+            for position, car in detected
+        }
 
         if all(
             position in order_map
-            for position in (1, 2, 3)
+            for position in (
+                1,
+                2,
+                3,
+            )
         ):
             result = [
                 order_map[1],
@@ -181,6 +203,7 @@ def extract_finish_order_from_tables(
                 return result
 
     return []
+
 
 def extract_finish_order_from_text(
     body_text: str,
@@ -227,63 +250,6 @@ def extract_finish_order_from_text(
 
     return []
 
-
-
-def extract_trifecta_from_tables(
-    page: Any,
-) -> tuple[str, int] | None:
-    """
-    払戻表の「3連単」行から組番と払戻金を直接取得する。
-    """
-    tables = page.locator("table")
-
-    for table_index in range(tables.count()):
-        rows = tables.nth(table_index).locator("tr")
-
-        for row_index in range(rows.count()):
-            try:
-                cells = [
-                    normalize_text(value)
-                    for value in rows.nth(row_index)
-                    .locator("th, td")
-                    .all_inner_texts()
-                ]
-            except Exception:
-                continue
-
-            if not cells:
-                continue
-
-            joined = " | ".join(cells)
-
-            if "3連単" not in joined:
-                continue
-
-            combination = None
-            payout = None
-
-            for cell in cells:
-                match = re.search(
-                    r"(?<!\d)([1-9])\s*-\s*"
-                    r"([1-9])\s*-\s*([1-9])(?!\d)",
-                    cell,
-                )
-
-                if match:
-                    combination = "-".join(
-                        match.groups()
-                    )
-
-                if "円" in cell:
-                    value = parse_integer(cell)
-
-                    if value is not None and value >= 100:
-                        payout = value
-
-            if combination and payout:
-                return combination, payout
-
-    return None
 
 def extract_trifecta_payout(
     body_text: str,
@@ -489,45 +455,10 @@ def fetch_result(
             for number in finish_order
         )
 
-        trifecta_table_result = (
-            extract_trifecta_from_tables(
-                page
-            )
+        payout = extract_trifecta_payout(
+            body_text,
+            winning_combination,
         )
-
-        if trifecta_table_result:
-            table_combination, payout = (
-                trifecta_table_result
-            )
-
-            if (
-                table_combination
-                != winning_combination
-            ):
-                browser.close()
-
-                return {
-                    "success": False,
-                    "status": "validation_error",
-                    "message": (
-                        "着順表と3連単払戻表の"
-                        "組番が一致しません。"
-                    ),
-                    "finish_order": finish_order,
-                    "winning_combination": (
-                        winning_combination
-                    ),
-                    "payout_combination": (
-                        table_combination
-                    ),
-                    "result_url": result_url,
-                    "logs": logs,
-                }
-        else:
-            payout = extract_trifecta_payout(
-                body_text,
-                winning_combination,
-            )
 
         if payout is None:
             browser.close()

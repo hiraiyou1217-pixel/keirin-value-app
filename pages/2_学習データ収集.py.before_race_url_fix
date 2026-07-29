@@ -4,10 +4,6 @@ from datetime import date
 from typing import Any
 
 import streamlit as st
-from race_url_utils import (
-    infer_racecard_url,
-    normalize_racecard_url,
-)
 from current_race_snapshot import (
     load_current_race_snapshot,
 )
@@ -18,11 +14,9 @@ from result_auto_import import (
 from learning_database import (
     DATABASE_PATH,
     get_database_summary,
-    get_races_without_url,
     get_recent_races,
     initialize_database,
     save_race_result,
-    update_race_url,
     save_race_snapshot,
 )
 
@@ -164,29 +158,14 @@ default_race_number = int(
     )
 )
 
-session_race_url = st.session_state.get(
-    "racecard_url",
+default_race_url = str(
     st.session_state.get(
-        "selected_race_url",
-        "",
-    ),
-)
-
-default_race_url = infer_racecard_url(
-    explicit_url=(
-        session_race_url
-        or snapshot.get(
-            "race_url",
+        "racecard_url",
+        st.session_state.get(
+            "selected_race_url",
             "",
-        )
-    ),
-    logs=(
-        odds_logs
-        or snapshot.get(
-            "odds_logs",
-            [],
-        )
-    ),
+        ),
+    )
 )
 
 default_race_title = str(
@@ -287,10 +266,7 @@ if save_snapshot:
             race_date=race_date.strip(),
             venue=venue.strip(),
             race_number=int(race_number),
-            race_url=infer_racecard_url(
-                explicit_url=race_url,
-                logs=odds_logs,
-            ),
+            race_url=race_url.strip(),
             race_title=race_title.strip(),
             riders=riders,
             odds_rows=odds_rows,
@@ -303,103 +279,6 @@ if save_snapshot:
         )
 
         st.code(race_id)
-
-
-
-st.divider()
-st.subheader("出走表URLが未登録のレース")
-
-races_without_url = get_races_without_url(
-    limit=200
-)
-
-if not races_without_url:
-    st.success(
-        "URL未登録のレースはありません。"
-    )
-else:
-    st.warning(
-        f"{len(races_without_url)}レースで"
-        "出走表URLが未登録です。"
-    )
-
-    missing_url_options = {
-        (
-            f"{race['race_date']} "
-            f"{race['venue']} "
-            f"{race['race_number']}R "
-            f"{race['race_title'] or ''}"
-        ): race["race_id"]
-        for race in races_without_url
-    }
-
-    with st.form(
-        "repair_missing_race_url_form",
-        clear_on_submit=False,
-        enter_to_submit=False,
-    ):
-        selected_missing_label = (
-            st.selectbox(
-                "URLを登録するレース",
-                options=list(
-                    missing_url_options.keys()
-                ),
-            )
-        )
-
-        replacement_race_url = (
-            st.text_input(
-                "WINTICKET出走表URL",
-                placeholder=(
-                    "https://www.winticket.jp/"
-                    "keirin/.../racecard/.../.../..."
-                ),
-            )
-        )
-
-        save_replacement_url = (
-            st.form_submit_button(
-                "出走表URLを登録",
-                type="primary",
-            )
-        )
-
-    if save_replacement_url:
-        normalized_replacement_url = (
-            normalize_racecard_url(
-                replacement_race_url
-            )
-        )
-
-        if (
-            not normalized_replacement_url
-            or "/racecard/"
-            not in normalized_replacement_url
-        ):
-            st.error(
-                "有効なWINTICKETの"
-                "出走表URLを入力してください。"
-            )
-        else:
-            updated = update_race_url(
-                race_id=missing_url_options[
-                    selected_missing_label
-                ],
-                race_url=(
-                    normalized_replacement_url
-                ),
-            )
-
-            if updated:
-                st.success(
-                    "出走表URLを登録しました。"
-                    "ページを再読み込みすると"
-                    "一覧から消えます。"
-                )
-            else:
-                st.error(
-                    "URLを登録できませんでした。"
-                )
 
 
 st.divider()
