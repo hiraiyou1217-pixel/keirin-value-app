@@ -522,19 +522,11 @@ def fetch_all_odds(
                 "ブラウザ: システムのGoogle Chrome"
             )
         except Exception:
-            chrome_path = (
-                "/Applications/"
-                "Google Chrome.app/"
-                "Contents/MacOS/"
-                "Google Chrome"
-            )
-
             browser = playwright.chromium.launch(
-                executable_path=chrome_path,
                 **launch_options,
             )
             logs.append(
-                "ブラウザ: Google Chrome実行ファイル"
+                "ブラウザ: Playwright Chromium"
             )
 
         context = browser.new_context(

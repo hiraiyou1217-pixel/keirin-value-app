@@ -43,6 +43,54 @@ def referenced_surname(comment: str) -> str:
     return ""
 
 
+def resolve_referenced_rider(
+    referenced_name: str,
+    rider_by_number: dict[
+        int,
+        dict[str, Any],
+    ],
+    surname_to_numbers: dict[
+        str,
+        list[int],
+    ],
+) -> int | None:
+    exact_candidates = surname_to_numbers.get(
+        referenced_name,
+        [],
+    )
+
+    if len(exact_candidates) == 1:
+        return exact_candidates[0]
+
+    if len(exact_candidates) > 1:
+        return None
+
+    # WINTICKETのコメントは「中君」のように
+    # 1文字姓を使う一方、出走表の姓名に空白がない
+    # 場合がある。先頭一致が1人だけなら照合する。
+    candidates = []
+
+    for number, rider in rider_by_number.items():
+        rider_name = "".join(
+            str(
+                rider.get(
+                    "選手名",
+                    "",
+                )
+            ).split()
+        )
+
+        if rider_name.startswith(
+            referenced_name
+        ):
+            candidates.append(number)
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    return None
+
+
 def infer_lineup_from_comments(
     riders: list[dict[str, Any]],
 ) -> tuple[list[list[int]], list[str]]:
@@ -56,7 +104,10 @@ def infer_lineup_from_comments(
         if rider.get("車番") is not None
     }
 
-    surname_to_number: dict[str, int] = {}
+    surname_to_numbers: dict[
+        str,
+        list[int],
+    ] = {}
 
     for number, rider in rider_by_number.items():
         surname = surname_from_name(
@@ -64,7 +115,10 @@ def infer_lineup_from_comments(
         )
 
         if surname:
-            surname_to_number[surname] = number
+            surname_to_numbers.setdefault(
+                surname,
+                [],
+            ).append(number)
 
     # follower -> leader
     follows: dict[int, int] = {}
@@ -79,7 +133,11 @@ def infer_lineup_from_comments(
         if not surname:
             continue
 
-        leader = surname_to_number.get(surname)
+        leader = resolve_referenced_rider(
+            surname,
+            rider_by_number,
+            surname_to_numbers,
+        )
 
         if leader is None or leader == number:
             continue
@@ -317,3 +375,154 @@ def merge_dom_order_with_comment_groups(
     )
 
     return cleaned_groups, logs
+
+
+def _complete_lineup(
+    groups: list[list[int]],
+    rider_numbers: list[int],
+) -> bool:
+    flattened = [
+        int(number)
+        for group in groups
+        for number in group
+    ]
+
+    return (
+        len(flattened)
+        == len(set(flattened))
+        and set(flattened)
+        == set(rider_numbers)
+    )
+
+
+def select_authoritative_lineup(
+    dom_groups: list[list[int]],
+    comment_groups: list[list[int]],
+    rider_numbers: list[int],
+) -> tuple[
+    list[list[int]],
+    dict[str, Any],
+    list[str],
+]:
+    logs = [
+        "並び採用判定: DOM構造優先＋"
+        "選手コメント整合性確認"
+    ]
+    dom_complete = _complete_lineup(
+        dom_groups,
+        rider_numbers,
+    )
+    comment_complete = _complete_lineup(
+        comment_groups,
+        rider_numbers,
+    )
+    dom_informative = (
+        dom_complete
+        and len(dom_groups) >= 2
+        and any(
+            len(group) >= 2
+            for group in dom_groups
+        )
+    )
+    comment_pairs = {
+        (
+            int(group[index]),
+            int(group[index + 1]),
+        )
+        for group in comment_groups
+        if len(group) >= 2
+        for index in range(
+            len(group) - 1
+        )
+    }
+    dom_pairs = {
+        (
+            int(group[index]),
+            int(group[index + 1]),
+        )
+        for group in dom_groups
+        if len(group) >= 2
+        for index in range(
+            len(group) - 1
+        )
+    }
+    comment_consistent = (
+        not comment_pairs
+        or comment_pairs.issubset(
+            dom_pairs
+        )
+    )
+
+    if (
+        dom_informative
+        and comment_consistent
+    ):
+        groups = dom_groups
+        metadata = {
+            "並び取得方式": (
+                "DOM構造＋コメント確認"
+            ),
+            "並び信頼度": 0.95,
+        }
+        logs.append(
+            "採用理由: DOMでライン境界を検出し、"
+            "コメント連携とも整合"
+        )
+    elif (
+        comment_complete
+        and comment_pairs
+    ):
+        groups = comment_groups
+        metadata = {
+            "並び取得方式": (
+                "選手コメント推定"
+            ),
+            "並び信頼度": 0.60,
+        }
+        logs.append(
+            "採用理由: DOM境界が不明または"
+            "コメントと不整合のためコメント推定"
+        )
+    elif dom_complete:
+        groups = dom_groups
+        metadata = {
+            "並び取得方式": (
+                "DOM順・境界低信頼"
+            ),
+            "並び信頼度": 0.35,
+        }
+        logs.append(
+            "採用理由: コメント連携がなく、"
+            "完全なDOM順を低信頼で採用"
+        )
+    else:
+        groups = [
+            [int(number)]
+            for number in rider_numbers
+        ]
+        metadata = {
+            "並び取得方式": "未判定",
+            "並び信頼度": 0.0,
+        }
+        logs.append(
+            "採用理由: 完全な並びを取得できず"
+            "全車単騎として保持"
+        )
+
+    logs.append(
+        "最終採用並び: "
+        + " / ".join(
+            "-".join(
+                str(number)
+                for number in group
+            )
+            for group in groups
+        )
+    )
+    logs.append(
+        "並びメタデータ: "
+        f"方式={metadata['並び取得方式']} "
+        f"信頼度={metadata['並び信頼度']}"
+    )
+
+    return groups, metadata, logs

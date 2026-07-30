@@ -8,6 +8,11 @@ from typing import Any
 
 from playwright.sync_api import sync_playwright
 
+from race_metadata import (
+    decorate_riders_with_race_conditions,
+    parse_race_conditions,
+    parse_rider_profile,
+)
 
 def parse_float(value: Any) -> float | None:
     if value is None:
@@ -135,15 +140,11 @@ def fetch_racecard_data(
 
         except Exception:
             browser = playwright.chromium.launch(
-                executable_path=(
-                    "/Applications/"
-                    "Google Chrome.app/"
-                    "Contents/MacOS/"
-                    "Google Chrome"
-                ),
                 **launch_options,
             )
-            logs.append("ブラウザ: Google Chrome実行ファイル")
+            logs.append(
+                "ブラウザ: Playwright Chromium"
+            )
 
         context = browser.new_context(
             viewport={
@@ -168,7 +169,33 @@ def fetch_racecard_data(
 
         page.wait_for_timeout(2500)
 
-        logs.append(f"ページタイトル: {page.title()}")
+        page_title = page.title()
+        body_text = page.locator(
+            "body"
+        ).inner_text()
+        race_conditions = (
+            parse_race_conditions(
+                page_title=page_title,
+                body_text=body_text,
+                racecard_url=racecard_url,
+            )
+        )
+        logs.append(
+            f"ページタイトル: {page_title}"
+        )
+        logs.append(
+            "レース条件: "
+            + " ".join(
+                f"{key}={value}"
+                for key, value in (
+                    race_conditions.items()
+                )
+                if value not in (
+                    None,
+                    "",
+                )
+            )
+        )
 
         tables = page.locator("table").evaluate_all(
             """
@@ -182,7 +209,10 @@ def fetch_racecard_data(
                         headers: [...row.querySelectorAll("th")]
                             .map(cell => (cell.innerText || cell.textContent || "").trim()),
                         cells: [...row.querySelectorAll("td")]
-                            .map(cell => (cell.innerText || cell.textContent || "").trim())
+                            .map(cell => (cell.innerText || cell.textContent || "").trim()),
+                        cellLinks: [...row.querySelectorAll("td")]
+                            .map(cell => [...cell.querySelectorAll("a")]
+                                .map(link => link.href || ""))
                     }))
                 };
             })
@@ -309,6 +339,10 @@ def fetch_racecard_data(
 
         for row_index, row in enumerate(rows):
             cells = row.get("cells", [])
+            cell_links = row.get(
+                "cellLinks",
+                [],
+            )
             row_headers = row.get("headers", [])
 
             logs.append(
@@ -337,6 +371,10 @@ def fetch_racecard_data(
                     f"セル数={len(cells)} → {len(headers)}"
                 )
                 cells = [""] + cells
+                cell_links = [
+                    [],
+                    *cell_links,
+                ]
 
             competition_score = parse_float(
                 cell_value(cells, score_index)
@@ -403,6 +441,37 @@ def fetch_racecard_data(
                 cells,
                 name_index,
             )
+            name_links = (
+                cell_links[name_index]
+                if (
+                    name_index is not None
+                    and 0
+                    <= name_index
+                    < len(cell_links)
+                    and isinstance(
+                        cell_links[
+                            name_index
+                        ],
+                        list,
+                    )
+                )
+                else []
+            )
+            cyclist_url = next(
+                (
+                    str(link)
+                    for link in name_links
+                    if "/keirin/cyclist/"
+                    in str(link)
+                ),
+                "",
+            )
+            rider_profile = (
+                parse_rider_profile(
+                    name_text,
+                    cyclist_url,
+                )
+            )
 
             style = cell_value(
                 cells,
@@ -418,8 +487,23 @@ def fetch_racecard_data(
 
             rider = {
                 "車番": car_number,
-                "選手名": clean_name(name_text)
-                or f"{car_number}番車",
+                "選手名": (
+                    rider_profile[
+                        "選手名"
+                    ]
+                    or clean_name(name_text)
+                    or f"{car_number}番車"
+                ),
+                "選手ID": rider_profile[
+                    "選手ID"
+                ],
+                "府県": rider_profile["府県"],
+                "級班": rider_profile["級班"],
+                "年齢": rider_profile["年齢"],
+                "期別": rider_profile["期別"],
+                "選手URL": rider_profile[
+                    "選手URL"
+                ],
                 "AI印": cell_value(
                     cells,
                     ai_index,
@@ -471,6 +555,12 @@ def fetch_racecard_data(
         riders_by_number[number]
         for number in sorted(riders_by_number)
     ]
+    result = (
+        decorate_riders_with_race_conditions(
+            result,
+            race_conditions,
+        )
+    )
 
     logs.append(
         f"選手データ取得件数: {len(result)}件"
@@ -480,6 +570,11 @@ def fetch_racecard_data(
         logs.append(
             f"{rider['車番']}番 "
             f"{rider['選手名']} "
+            f"ID={rider.get('選手ID', '')} "
+            f"府県={rider.get('府県', '')} "
+            f"級班={rider.get('級班', '')} "
+            f"年齢={rider.get('年齢', '')} "
+            f"期別={rider.get('期別', '')} "
             f"AI印={rider.get('AI印', '')} "
             f"競走得点={rider['競走得点']} "
             f"脚質={rider['脚質']} "

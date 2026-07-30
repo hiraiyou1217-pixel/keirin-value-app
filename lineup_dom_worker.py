@@ -138,6 +138,232 @@ def parse_line_groups(
     return best_groups
 
 
+def group_lineup_geometry(
+    items: list[dict[str, Any]],
+    rider_numbers: list[int],
+) -> list[list[int]]:
+    valid = set(rider_numbers)
+    candidates = [
+        {
+            **item,
+            "number": int(
+                item.get("number", 0)
+            ),
+            "x": float(item.get("x", 0.0)),
+            "y": float(item.get("y", 0.0)),
+            "width": max(
+                1.0,
+                float(
+                    item.get(
+                        "width",
+                        1.0,
+                    )
+                ),
+            ),
+        }
+        for item in items
+        if int(
+            item.get("number", 0)
+            or 0
+        )
+        in valid
+    ]
+
+    if not candidates:
+        return []
+
+    semantic: dict[str, list[
+        dict[str, Any]
+    ]] = {}
+
+    for item in candidates:
+        group_key = str(
+            item.get("groupKey", "")
+        )
+
+        if group_key:
+            semantic.setdefault(
+                group_key,
+                [],
+            ).append(item)
+
+    semantic_groups = [
+        sorted(
+            {
+                int(item["number"]): item
+                for item in group
+            }.values(),
+            key=lambda item: (
+                item["y"],
+                item["x"],
+            ),
+        )
+        for group in semantic.values()
+    ]
+    semantic_numbers = [
+        int(item["number"])
+        for group in semantic_groups
+        for item in group
+    ]
+
+    if (
+        len(semantic_groups) >= 2
+        and any(
+            len(group) >= 2
+            for group in semantic_groups
+        )
+        and len(semantic_numbers)
+        == len(set(semantic_numbers))
+        and set(semantic_numbers) == valid
+    ):
+        ordered = sorted(
+            semantic_groups,
+            key=lambda group: (
+                min(
+                    item["y"]
+                    for item in group
+                ),
+                min(
+                    item["x"]
+                    for item in group
+                ),
+            ),
+        )
+
+        return [
+            [
+                int(item["number"])
+                for item in group
+            ]
+            for group in ordered
+        ]
+
+    by_number: dict[
+        int,
+        dict[str, Any],
+    ] = {}
+
+    for item in sorted(
+        candidates,
+        key=lambda value: (
+            value["y"],
+            value["x"],
+        ),
+    ):
+        by_number.setdefault(
+            int(item["number"]),
+            item,
+        )
+
+    if set(by_number) != valid:
+        return []
+
+    ordered_items = sorted(
+        by_number.values(),
+        key=lambda item: (
+            item["y"],
+            item["x"],
+        ),
+    )
+    row_tolerance = max(
+        8.0,
+        max(
+            float(
+                item.get(
+                    "height",
+                    1.0,
+                )
+            )
+            for item in ordered_items
+        )
+        * 0.6,
+    )
+    rows: list[list[dict[str, Any]]] = []
+
+    for item in ordered_items:
+        if (
+            not rows
+            or abs(
+                item["y"]
+                - rows[-1][0]["y"]
+            )
+            > row_tolerance
+        ):
+            rows.append([item])
+        else:
+            rows[-1].append(item)
+
+    groups: list[list[int]] = []
+
+    for row in rows:
+        row.sort(
+            key=lambda item: item["x"]
+        )
+
+        if len(row) == 1:
+            groups.append(
+                [int(row[0]["number"])]
+            )
+            continue
+
+        edge_gaps = [
+            max(
+                0.0,
+                row[index + 1]["x"]
+                - (
+                    row[index]["x"]
+                    + row[index]["width"]
+                ),
+            )
+            for index in range(
+                len(row) - 1
+            )
+        ]
+        sorted_gaps = sorted(edge_gaps)
+        typical_gap = sorted_gaps[
+            (len(sorted_gaps) - 1) // 2
+        ]
+        boundary_threshold = max(
+            8.0,
+            typical_gap * 1.8,
+        )
+        current = [
+            int(row[0]["number"])
+        ]
+
+        for index, gap in enumerate(
+            edge_gaps
+        ):
+            if gap >= boundary_threshold:
+                groups.append(current)
+                current = []
+
+            current.append(
+                int(
+                    row[index + 1][
+                        "number"
+                    ]
+                )
+            )
+
+        groups.append(current)
+
+    flattened = [
+        number
+        for group in groups
+        for number in group
+    ]
+
+    if (
+        len(flattened)
+        != len(set(flattened))
+        or set(flattened) != valid
+    ):
+        return []
+
+    return groups
+
+
 def fetch_lineup(
     racecard_url: str,
     rider_numbers: list[int],
@@ -167,15 +393,11 @@ def fetch_lineup(
 
         except Exception:
             browser = playwright.chromium.launch(
-                executable_path=(
-                    "/Applications/"
-                    "Google Chrome.app/"
-                    "Contents/MacOS/"
-                    "Google Chrome"
-                ),
                 **launch_options,
             )
-            logs.append("ブラウザ: Google Chrome実行ファイル")
+            logs.append(
+                "ブラウザ: Playwright Chromium"
+            )
 
         context = browser.new_context(
             viewport={
@@ -201,6 +423,9 @@ def fetch_lineup(
         page.wait_for_timeout(2000)
 
         source_text = ""
+        geometry_items: list[
+            dict[str, Any]
+        ] = []
 
         lineup_labels = page.get_by_text(
             re.compile(r"並び予想")
@@ -241,6 +466,177 @@ def fetch_lineup(
                 }
                 """
             )
+            geometry_items = (
+                lineup_labels.first.evaluate(
+                    """
+                    element => {
+                        let section = element;
+
+                        for (
+                            let depth = 0;
+                            depth < 10;
+                            depth += 1
+                        ) {
+                            if (!section) break;
+                            const text = (
+                                section.innerText ||
+                                section.textContent ||
+                                ""
+                            ).trim();
+                            const lines = text
+                                .split(String.fromCharCode(10))
+                                .filter(
+                                    line =>
+                                        line.trim().length > 0
+                                );
+
+                            if (
+                                text.includes("並び予想") &&
+                                lines.length >= 2 &&
+                                lines.length <= 80
+                            ) {
+                                break;
+                            }
+
+                            section =
+                                section.parentElement;
+                        }
+
+                        if (!section) return [];
+
+                        const validText = value =>
+                            /^[1-9]$/.test(
+                                (value || "").trim()
+                            );
+                        const labelRect =
+                            element.getBoundingClientRect();
+                        const elements = [
+                            ...section.querySelectorAll("*")
+                        ];
+                        const leaves = elements.filter(
+                            candidate => {
+                                const style =
+                                    getComputedStyle(candidate);
+                                const rect =
+                                    candidate.getBoundingClientRect();
+                                const text = (
+                                    candidate.innerText ||
+                                    candidate.textContent ||
+                                    ""
+                                ).trim();
+                                const childRepeats = [
+                                    ...candidate.children
+                                ].some(
+                                    child => validText(
+                                        child.innerText ||
+                                        child.textContent
+                                    )
+                                );
+
+                                return (
+                                    validText(text) &&
+                                    !childRepeats &&
+                                    style.display !== "none" &&
+                                    style.visibility !== "hidden" &&
+                                    rect.width > 0 &&
+                                    rect.height > 0 &&
+                                    rect.top >=
+                                        labelRect.bottom - 6 &&
+                                    rect.top <=
+                                        labelRect.bottom + 320
+                                );
+                            }
+                        );
+                        const totalNumbers = new Set(
+                            leaves.map(
+                                leaf => (
+                                    leaf.innerText ||
+                                    leaf.textContent ||
+                                    ""
+                                ).trim()
+                            )
+                        ).size;
+
+                        return leaves.map(leaf => {
+                            let current =
+                                leaf.parentElement;
+                            let selected = leaf;
+
+                            while (
+                                current &&
+                                current !== section
+                            ) {
+                                const numbers = [
+                                    ...current
+                                        .querySelectorAll("*")
+                                ].filter(candidate => {
+                                    const text = (
+                                        candidate.innerText ||
+                                        candidate.textContent ||
+                                        ""
+                                    ).trim();
+                                    const childRepeats = [
+                                        ...candidate.children
+                                    ].some(
+                                        child => validText(
+                                            child.innerText ||
+                                            child.textContent
+                                        )
+                                    );
+
+                                    return (
+                                        validText(text) &&
+                                        !childRepeats
+                                    );
+                                });
+                                const unique =
+                                    new Set(
+                                        numbers.map(
+                                            candidate => (
+                                                candidate.innerText ||
+                                                candidate.textContent ||
+                                                ""
+                                            ).trim()
+                                        )
+                                    ).size;
+
+                                if (
+                                    unique >= 1 &&
+                                    unique < totalNumbers
+                                ) {
+                                    selected = current;
+                                }
+
+                                current =
+                                    current.parentElement;
+                            }
+
+                            const rect =
+                                leaf.getBoundingClientRect();
+
+                            return {
+                                number: Number(
+                                    (
+                                        leaf.innerText ||
+                                        leaf.textContent ||
+                                        ""
+                                    ).trim()
+                                ),
+                                x: rect.left,
+                                y: rect.top,
+                                width: rect.width,
+                                height: rect.height,
+                                groupKey: String(
+                                    elements.indexOf(
+                                        selected
+                                    )
+                                )
+                            };
+                        });
+                    }
+                    """
+                )
+            )
 
         if not source_text:
             body_text = page.locator("body").inner_text()
@@ -263,9 +659,36 @@ def fetch_lineup(
         )[:1000]
     )
 
-    groups = parse_line_groups(
+    geometry_groups = (
+        group_lineup_geometry(
+            geometry_items,
+            rider_numbers,
+        )
+    )
+    text_groups = parse_line_groups(
         source_text,
         rider_numbers,
+    )
+    geometry_informative = (
+        len(geometry_groups) >= 2
+        and any(
+            len(group) >= 2
+            for group in geometry_groups
+        )
+    )
+    groups = (
+        geometry_groups
+        if geometry_informative
+        else text_groups
+    )
+
+    logs.append(
+        "DOM並び解析方式: "
+        + (
+            "要素グループ・座標"
+            if geometry_informative
+            else "抽出テキスト"
+        )
     )
 
     logs.append(

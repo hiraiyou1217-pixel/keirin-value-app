@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import streamlit as st
+from history_import_manager import (
+    load_latest_job,
+    start_history_import,
+)
 from race_url_utils import (
     infer_racecard_url,
     normalize_racecard_url,
@@ -40,12 +44,21 @@ st.title("🧠 学習データ収集")
 st.caption(
     "取得済みの出走表・オッズ・並びを、"
     "機械学習用SQLiteデータベースへ保存します。"
+    "オッズ非表示時は独立AI用データとして"
+    "安全に保存します。"
 )
 
 summary = get_database_summary()
 
-summary_col1, summary_col2, summary_col3, summary_col4 = (
-    st.columns(4)
+(
+    summary_col1,
+    summary_col2,
+    summary_col3,
+    summary_col4,
+    summary_col5,
+    summary_col6,
+) = (
+    st.columns(6)
 )
 
 with summary_col1:
@@ -62,11 +75,23 @@ with summary_col2:
 
 with summary_col3:
     st.metric(
+        "要確認レース",
+        f"{summary['review_count']:,}",
+    )
+
+with summary_col4:
+    st.metric(
+        "オッズなし",
+        f"{summary['independent_only_count']:,}",
+    )
+
+with summary_col5:
+    st.metric(
         "オッズ行数",
         f"{summary['odds_count']:,}",
     )
 
-with summary_col4:
+with summary_col6:
     st.metric(
         "選手行数",
         f"{summary['rider_count']:,}",
@@ -75,6 +100,311 @@ with summary_col4:
 st.info(
     f"保存先：{DATABASE_PATH}"
 )
+
+
+st.divider()
+st.subheader("過去レース一括インポート")
+
+st.caption(
+    "WINTICKETの日付別結果一覧から"
+    "全開催場・全レースを発見し、"
+    "出走表・選手・並び・3連単全オッズ・"
+    "結果を分離Workerで収集します。"
+    "深夜などオッズ非表示時は不完全な"
+    "オッズを破棄し、オッズ非依存AI用の"
+    "出走表・並び・結果だけを保存します。"
+)
+
+yesterday = date.today() - timedelta(
+    days=1
+)
+default_start_date = yesterday - timedelta(
+    days=6
+)
+
+with st.form(
+    "history_import_form",
+    clear_on_submit=False,
+    enter_to_submit=False,
+):
+    (
+        history_col1,
+        history_col2,
+        history_col3,
+    ) = st.columns(3)
+
+    with history_col1:
+        history_start_date = st.date_input(
+            "開始日",
+            value=default_start_date,
+            max_value=yesterday,
+            key="history_start_date",
+        )
+
+    with history_col2:
+        history_end_date = st.date_input(
+            "終了日",
+            value=yesterday,
+            max_value=yesterday,
+            key="history_end_date",
+        )
+
+    with history_col3:
+        history_maximum = st.number_input(
+            "最大取得数",
+            min_value=1,
+            max_value=1000,
+            value=30,
+            step=10,
+        )
+
+    start_history = st.form_submit_button(
+        "過去レース収集を開始",
+        type="primary",
+    )
+
+if start_history:
+    try:
+        started_job = start_history_import(
+            start_date=history_start_date,
+            end_date=history_end_date,
+            maximum_races=int(
+                history_maximum
+            ),
+        )
+        st.session_state[
+            "history_import_job_id"
+        ] = started_job["job_id"]
+        st.success(
+            "分離Workerを起動しました。"
+            "このページを閉じても処理は継続します。"
+        )
+    except Exception as exc:
+        st.error(
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+def _history_rows(
+    details: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "開催日": detail.get(
+                "race_date",
+                "",
+            ),
+            "競輪場": detail.get(
+                "venue",
+                "",
+            ),
+            "R": (
+                detail.get(
+                    "race_number",
+                    "",
+                )
+                or ""
+            ),
+            "状態": detail.get(
+                "status",
+                "",
+            ),
+            "保存用途": (
+                {
+                    "independent": (
+                        "オッズ非依存AI"
+                    ),
+                    "full": "全オッズ",
+                }.get(
+                    str(
+                        detail.get(
+                            "data_scope",
+                            "",
+                        )
+                    ),
+                    "",
+                )
+            ),
+            "3連単": detail.get(
+                "winning_combination",
+                "",
+            ),
+            "払戻": (
+                detail.get(
+                    "payout_per_100",
+                    "",
+                )
+                or ""
+            ),
+            "メッセージ": detail.get(
+                "message",
+                "",
+            ),
+        }
+        for detail in details
+    ]
+
+
+@st.fragment(run_every="3s")
+def render_history_import_progress() -> None:
+    job = load_latest_job()
+
+    if not job:
+        st.info(
+            "過去レースWorkerは"
+            "まだ実行されていません。"
+        )
+        return
+
+    status_labels = {
+        "running": "実行中",
+        "completed": "完了",
+        "failed": "失敗終了",
+        "stopped": "異常終了",
+    }
+    status = str(
+        job.get("status", "")
+    )
+    processed = int(
+        job.get("processed", 0)
+    )
+    total = int(
+        job.get("total", 0)
+    )
+    progress_value = (
+        min(processed / total, 1.0)
+        if total > 0
+        else 0.0
+    )
+
+    st.write(
+        f"Worker状態："
+        f"{status_labels.get(status, status)}"
+    )
+    st.progress(
+        progress_value,
+        text=str(
+            job.get("message", "")
+        ),
+    )
+
+    (
+        job_col1,
+        job_col2,
+        job_col3,
+        job_col4,
+        job_col5,
+    ) = st.columns(5)
+
+    with job_col1:
+        st.metric(
+            "処理",
+            f"{processed}/{total}",
+        )
+
+    with job_col2:
+        st.metric(
+            "成功",
+            int(
+                job.get(
+                    "success_count",
+                    0,
+                )
+            ),
+        )
+
+    with job_col3:
+        st.metric(
+            "失敗",
+            int(
+                job.get(
+                    "failure_count",
+                    0,
+                )
+            ),
+        )
+
+    with job_col4:
+        st.metric(
+            "要確認",
+            int(
+                job.get(
+                    "review_count",
+                    0,
+                )
+            ),
+        )
+
+    with job_col5:
+        st.metric(
+            "オッズなし保存",
+            int(
+                job.get(
+                    "independent_count",
+                    0,
+                )
+            ),
+        )
+
+    successes = _history_rows(
+        list(job.get("successes", []))
+    )
+    failures = _history_rows(
+        list(job.get("failures", []))
+    )
+    reviews = _history_rows(
+        list(job.get("reviews", []))
+    )
+
+    success_tab, failure_tab, review_tab = (
+        st.tabs(
+            [
+                "成功一覧",
+                "失敗一覧",
+                "要確認一覧",
+            ]
+        )
+    )
+
+    with success_tab:
+        if successes:
+            st.dataframe(
+                successes,
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption(
+                "成功レースはまだありません。"
+            )
+
+    with failure_tab:
+        if failures:
+            st.dataframe(
+                failures,
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption(
+                "失敗レースはありません。"
+            )
+
+    with review_tab:
+        if reviews:
+            st.dataframe(
+                reviews,
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption(
+                "要確認レースはありません。"
+            )
+
+
+render_history_import_progress()
+
 
 st.divider()
 st.subheader("現在取得中のレースを保存")
@@ -463,8 +793,14 @@ import_result = st.session_state.get(
 )
 
 if import_result:
-    result_col1, result_col2, result_col3, result_col4 = (
-        st.columns(4)
+    (
+        result_col1,
+        result_col2,
+        result_col3,
+        result_col4,
+        result_col5,
+    ) = (
+        st.columns(5)
     )
 
     with result_col1:
@@ -486,6 +822,15 @@ if import_result:
         )
 
     with result_col4:
+        st.metric(
+            "要確認",
+            import_result.get(
+                "review",
+                0,
+            ),
+        )
+
+    with result_col5:
         st.metric(
             "取得失敗",
             import_result["failed"],
@@ -678,9 +1023,16 @@ if recent_races:
                 "オッズ完全": (
                     "OK"
                     if race["odds_complete"]
-                    else "NG"
+                    else "非依存AI用"
                 ),
                 "結果": race["result_status"],
+                "要確認理由": (
+                    race.get(
+                        "review_reason",
+                        "",
+                    )
+                    or ""
+                ),
                 "確定組番": (
                     race["winning_combination"]
                     or ""

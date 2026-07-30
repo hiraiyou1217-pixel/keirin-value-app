@@ -7,9 +7,12 @@ import re
 import ssl
 from typing import Any
 from urllib.error import HTTPError, URLError
-
-import certifi
 from urllib.request import Request, urlopen
+
+try:
+    import certifi
+except ImportError:
+    certifi = None
 
 
 COMBO_RE = re.compile(
@@ -25,6 +28,10 @@ SCRIPT_JSON_RE = re.compile(
 NEXT_DATA_RE = re.compile(
     r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
     re.I | re.S,
+)
+
+PRELOADED_STATE_MARKER = (
+    "window.__PRELOADED_STATE__"
 )
 
 
@@ -193,6 +200,98 @@ def extract_from_json(
             extract_from_json(child, output)
 
 
+def extract_preloaded_state(
+    html: str,
+) -> Any | None:
+    marker_index = html.find(
+        PRELOADED_STATE_MARKER
+    )
+
+    if marker_index < 0:
+        return None
+
+    assignment_index = html.find(
+        "=",
+        marker_index
+        + len(PRELOADED_STATE_MARKER),
+    )
+
+    if assignment_index < 0:
+        return None
+
+    candidate = html[
+        assignment_index + 1:
+    ].lstrip()
+
+    try:
+        value, _ = (
+            json.JSONDecoder().raw_decode(
+                candidate
+            )
+        )
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    return value
+
+
+def extract_trifecta_arrays(
+    value: Any,
+    output: dict[str, dict[str, Any]],
+) -> None:
+    if isinstance(value, dict):
+        trifecta = value.get("trifecta")
+
+        if isinstance(trifecta, list):
+            for item in trifecta:
+                if not isinstance(item, dict):
+                    continue
+
+                if item.get("type") not in (
+                    None,
+                    2,
+                    "2",
+                ):
+                    continue
+
+                combo = normalise_combo(
+                    item.get("key")
+                )
+                odds = normalise_odds(
+                    item.get(
+                        "odds",
+                        item.get("oddsStr"),
+                    )
+                )
+                rank = normalise_rank(
+                    item.get(
+                        "popularityOrder"
+                    )
+                )
+
+                if combo is None or odds is None:
+                    continue
+
+                output[combo] = {
+                    "組番": combo,
+                    "オッズ": odds,
+                    "人気": rank or 9999,
+                }
+
+        for child in value.values():
+            extract_trifecta_arrays(
+                child,
+                output,
+            )
+
+    elif isinstance(value, list):
+        for child in value:
+            extract_trifecta_arrays(
+                child,
+                output,
+            )
+
+
 def extract_json_blobs(html: str) -> list[Any]:
     blobs: list[Any] = []
 
@@ -207,7 +306,34 @@ def extract_json_blobs(html: str) -> list[Any]:
         except (json.JSONDecodeError, TypeError):
             continue
 
+    preloaded_state = extract_preloaded_state(
+        html
+    )
+
+    if preloaded_state is not None:
+        blobs.append(preloaded_state)
+
     return blobs
+
+
+def _ssl_contexts() -> list[ssl.SSLContext]:
+    contexts = [
+        ssl.create_default_context(),
+    ]
+
+    try:
+        if certifi is None:
+            return contexts
+
+        contexts.append(
+            ssl.create_default_context(
+                cafile=certifi.where()
+            )
+        )
+    except Exception:
+        pass
+
+    return contexts
 
 
 def extract_from_visible_text(
@@ -353,37 +479,50 @@ def fetch_trifecta_odds_http(
         },
     )
 
-    try:
-        ssl_context = ssl.create_default_context(
-            cafile=certifi.where()
-        )
+    raw = b""
+    status = 0
+    charset = "utf-8"
+    last_error: Exception | None = None
 
-        with urlopen(
-            request,
-            timeout=30,
-            context=ssl_context,
-        ) as response:
-            status = getattr(response, "status", 200)
-            charset = (
-                response.headers.get_content_charset()
-                or "utf-8"
+    for ssl_context in _ssl_contexts():
+        try:
+            with urlopen(
+                request,
+                timeout=30,
+                context=ssl_context,
+            ) as response:
+                status = getattr(
+                    response,
+                    "status",
+                    200,
+                )
+                charset = (
+                    response.headers
+                    .get_content_charset()
+                    or "utf-8"
+                )
+                raw = response.read()
+            break
+        except Exception as exc:
+            last_error = exc
+
+    if not raw:
+        if isinstance(last_error, HTTPError):
+            logs.append(
+                "HTTPエラー: "
+                f"{last_error.code} "
+                f"{last_error.reason}"
             )
-            raw = response.read()
-
-    except HTTPError as exc:
-        logs.append(
-            f"HTTPエラー: {exc.code} {exc.reason}"
-        )
-        return [], logs
-
-    except URLError as exc:
-        logs.append(f"通信エラー: {exc.reason}")
-        return [], logs
-
-    except Exception as exc:
-        logs.append(
-            f"取得エラー: {type(exc).__name__}: {exc}"
-        )
+        elif isinstance(last_error, URLError):
+            logs.append(
+                f"通信エラー: {last_error.reason}"
+            )
+        elif last_error is not None:
+            logs.append(
+                "取得エラー: "
+                f"{type(last_error).__name__}: "
+                f"{last_error}"
+            )
         return [], logs
 
     html = raw.decode(charset, errors="replace")
@@ -391,15 +530,34 @@ def fetch_trifecta_odds_http(
     logs.append(f"HTTP状態: {status}")
     logs.append(f"受信サイズ: {len(raw):,} bytes")
 
-    output: dict[str, dict[str, Any]] = {}
     blobs = extract_json_blobs(html)
 
     logs.append(f"埋め込みJSON候補: {len(blobs)}個")
 
-    for blob in blobs:
-        extract_from_json(blob, output)
+    output: dict[str, dict[str, Any]] = {}
 
-    logs.append(f"JSON解析取得: {len(output)}件")
+    for blob in blobs:
+        extract_trifecta_arrays(
+            blob,
+            output,
+        )
+
+    logs.append(
+        "3連単配列解析取得: "
+        f"{len(output)}件"
+    )
+
+    if not output:
+        for blob in blobs:
+            extract_from_json(
+                blob,
+                output,
+            )
+
+        logs.append(
+            "汎用JSON解析取得: "
+            f"{len(output)}件"
+        )
 
     if not output:
         text_rows = extract_from_visible_text(html)

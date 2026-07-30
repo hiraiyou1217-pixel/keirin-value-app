@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
+from race_metadata import (
+    extract_race_conditions_from_riders,
+)
 
 SNAPSHOT_PATH = (
     Path(__file__).resolve().parent
@@ -76,6 +79,11 @@ def save_current_race_snapshot(
         "race_number": int(race_number or 0),
         "race_url": str(race_url),
         "race_title": str(race_title),
+        "race_conditions": _json_safe(
+            extract_race_conditions_from_riders(
+                riders
+            )
+        ),
         "odds_rows": _json_safe(odds_rows),
         "riders": _json_safe(riders),
         "lineup_groups": _json_safe(
@@ -121,3 +129,154 @@ def load_current_race_snapshot() -> dict[str, Any]:
         return {}
 
     return payload
+
+
+def resolve_prediction_context(
+    snapshot: Mapping[str, Any],
+    session_values: Mapping[str, Any],
+    *,
+    default_date: Any = "",
+) -> dict[str, Any]:
+    """
+    予測対象の情報源を1つに固定する。
+
+    JSONがある場合は、対象レース・選手・並びを
+    すべて同じJSONから読み、古いセッション値と
+    混在させない。JSONがない場合だけセッションを
+    まとめて使用する。
+    """
+    if snapshot:
+        return {
+            "source": "snapshot",
+            "saved_at": str(
+                snapshot.get(
+                    "saved_at",
+                    "",
+                )
+            ),
+            "race_date": snapshot.get(
+                "race_date",
+                default_date,
+            ),
+            "venue": str(
+                snapshot.get(
+                    "venue",
+                    "",
+                )
+            ),
+            "race_number": int(
+                snapshot.get(
+                    "race_number",
+                    0,
+                )
+                or 0
+            ),
+            "race_url": str(
+                snapshot.get(
+                    "race_url",
+                    "",
+                )
+            ),
+            "race_title": str(
+                snapshot.get(
+                    "race_title",
+                    "",
+                )
+            ),
+            "race_conditions": dict(
+                snapshot.get(
+                    "race_conditions",
+                    {},
+                )
+                or {}
+            ),
+            "riders": list(
+                snapshot.get(
+                    "riders",
+                    [],
+                )
+                or []
+            ),
+            "lineup_groups": list(
+                snapshot.get(
+                    "lineup_groups",
+                    [],
+                )
+                or []
+            ),
+            "odds_complete": bool(
+                snapshot.get(
+                    "odds_complete",
+                    False,
+                )
+            ),
+        }
+
+    return {
+        "source": "session",
+        "saved_at": "",
+        "race_date": session_values.get(
+            "selected_date",
+            default_date,
+        ),
+        "venue": str(
+            session_values.get(
+                "selected_venue",
+                session_values.get(
+                    "venue",
+                    "",
+                ),
+            )
+        ),
+        "race_number": int(
+            session_values.get(
+                "selected_race_number",
+                session_values.get(
+                    "race_number",
+                    0,
+                ),
+            )
+            or 0
+        ),
+        "race_url": str(
+            session_values.get(
+                "selected_race_url",
+                session_values.get(
+                    "racecard_url",
+                    "",
+                ),
+            )
+        ),
+        "race_title": str(
+            session_values.get(
+                "race_title",
+                "",
+            )
+        ),
+        "race_conditions": (
+            extract_race_conditions_from_riders(
+                list(
+                    session_values.get(
+                        "rider_data",
+                        [],
+                    )
+                    or []
+                )
+            )
+        ),
+        "riders": list(
+            session_values.get(
+                "rider_data",
+                [],
+            )
+            or []
+        ),
+        "lineup_groups": list(
+            session_values.get(
+                "lineup_groups",
+                [],
+            )
+            or []
+        ),
+        "odds_complete": False,
+    }

@@ -8,5 +8,12 @@ logs/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/history_import_jobs/
+data/backups/
 models/*.joblib
 models/*_metadata.json
+
+# Android local build output
+android-fold5/.gradle/
+android-fold5/**/build/
+android-fold5/local.properties

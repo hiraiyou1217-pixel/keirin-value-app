@@ -5,6 +5,7 @@ from typing import Any
 from learning_database import (
     get_race_car_numbers,
     get_unfinished_races,
+    save_race_review,
     save_race_result,
 )
 from result_browser import (
@@ -24,6 +25,7 @@ def import_unfinished_results(
         "checked": 0,
         "registered": 0,
         "unsettled": 0,
+        "review": 0,
         "failed": 0,
         "details": [],
     }
@@ -137,6 +139,13 @@ def import_unfinished_results(
                         "payout_per_100"
                     ]
                 ),
+                result_url=str(
+                    result.get(
+                        "result_url",
+                        "",
+                    )
+                ),
+                raw_result=result,
             )
 
             detail[
@@ -152,6 +161,33 @@ def import_unfinished_results(
             ]
 
             summary["registered"] += 1
+
+        elif (
+            result.get("success")
+            and result.get("status")
+            == "review"
+        ):
+            review_reason = "、".join(
+                str(value)
+                for value in result.get(
+                    "review_reasons",
+                    [],
+                )
+            )
+
+            save_race_review(
+                race_id=race_id,
+                reason=review_reason,
+                result_url=str(
+                    result.get(
+                        "result_url",
+                        "",
+                    )
+                ),
+                raw_result=result,
+            )
+
+            summary["review"] += 1
 
         elif (
             result.get("success")

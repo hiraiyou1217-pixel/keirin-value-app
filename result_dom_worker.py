@@ -15,6 +15,16 @@ from playwright.sync_api import (
 from playwright.sync_api import sync_playwright
 
 
+RACE_MARKER_PATTERN = re.compile(
+    r"(?<!\d)"
+    r"(?:第\s*)?"
+    r"(\d{1,2})\s*"
+    r"(?:R|レ[-ー]?ス)"
+    r"(?!\d)",
+    re.IGNORECASE,
+)
+
+
 def build_result_url(
     race_url: str,
 ) -> str:
@@ -229,13 +239,13 @@ def extract_finish_order_from_text(
 
 
 
-def extract_trifecta_from_tables(
+def extract_trifecta_rows_from_tables(
     page: Any,
-) -> tuple[str, int] | None:
-    """
-    払戻表の「3連単」行から組番と払戻金を直接取得する。
-    """
+) -> tuple[list[dict[str, Any]], bool]:
+    """3連単払戻表を取得し、複数払戻も省略せず返す。"""
     tables = page.locator("table")
+    output: list[dict[str, Any]] = []
+    ambiguous = False
 
     for table_index in range(tables.count()):
         rows = tables.nth(table_index).locator("tr")
@@ -259,31 +269,68 @@ def extract_trifecta_from_tables(
             if "3連単" not in joined:
                 continue
 
-            combination = None
-            payout = None
-
-            for cell in cells:
-                match = re.search(
+            combinations = [
+                "-".join(match)
+                for match in re.findall(
                     r"(?<!\d)([1-9])\s*-\s*"
                     r"([1-9])\s*-\s*([1-9])(?!\d)",
-                    cell,
+                    joined,
                 )
+            ]
 
-                if match:
-                    combination = "-".join(
-                        match.groups()
-                    )
+            payouts = [
+                int(
+                    value.replace(",", "")
+                )
+                for value in re.findall(
+                    r"([\d,]+)\s*円",
+                    joined,
+                )
+                if int(
+                    value.replace(",", "")
+                )
+                >= 100
+            ]
 
-                if "円" in cell:
-                    value = parse_integer(cell)
+            if (
+                len(combinations) != len(payouts)
+                or not combinations
+            ):
+                ambiguous = True
+                continue
 
-                    if value is not None and value >= 100:
-                        payout = value
+            for combination, payout in zip(
+                combinations,
+                payouts,
+                strict=True,
+            ):
+                item = {
+                    "combination": combination,
+                    "payout_per_100": payout,
+                }
 
-            if combination and payout:
-                return combination, payout
+                if item not in output:
+                    output.append(item)
 
-    return None
+    return output, ambiguous
+
+
+def extract_trifecta_from_tables(
+    page: Any,
+) -> tuple[str, int] | None:
+    rows, ambiguous = (
+        extract_trifecta_rows_from_tables(
+            page
+        )
+    )
+
+    if ambiguous or len(rows) != 1:
+        return None
+
+    return (
+        str(rows[0]["combination"]),
+        int(rows[0]["payout_per_100"]),
+    )
 
 def extract_trifecta_payout(
     body_text: str,
@@ -355,6 +402,190 @@ def page_is_unsettled(
     )
 
 
+def extract_race_number_from_url(
+    result_url: str,
+) -> int | None:
+    path = urlparse(
+        str(result_url)
+    ).path.rstrip("/")
+    match = re.search(
+        r"/raceresult/\d+/\d+/(\d+)$",
+        path,
+    )
+
+    if not match:
+        return None
+
+    race_number = int(match.group(1))
+
+    if 1 <= race_number <= 12:
+        return race_number
+
+    return None
+
+
+def extract_race_scoped_text(
+    body_text: str,
+    race_number: int | None,
+) -> str:
+    normalized = normalize_text(
+        body_text
+    )
+
+    if race_number is None:
+        return normalized
+
+    markers = list(
+        RACE_MARKER_PATTERN.finditer(
+            normalized
+        )
+    )
+
+    if not markers:
+        return normalized
+
+    segments: list[str] = []
+
+    for index, marker in enumerate(markers):
+        if int(marker.group(1)) != int(
+            race_number
+        ):
+            continue
+
+        next_start = (
+            markers[index + 1].start()
+            if index + 1 < len(markers)
+            else min(
+                len(normalized),
+                marker.start() + 6_000,
+            )
+        )
+        segments.append(
+            normalized[
+                marker.start():next_start
+            ]
+        )
+
+    if not segments:
+        return normalized
+
+    return "\n".join(segments)
+
+
+def detect_manual_review_reasons(
+    body_text: str,
+    *,
+    race_number: int | None = None,
+    has_settled_result: bool = False,
+) -> list[str]:
+    keyword_labels = {
+        "同着": "同着",
+        "失格": "失格",
+        "中止": "中止",
+        "不成立": "不成立",
+    }
+    scoped_text = extract_race_scoped_text(
+        body_text,
+        race_number,
+    )
+    has_target_marker = (
+        race_number is not None
+        and any(
+            int(marker.group(1))
+            == int(race_number)
+            for marker
+            in RACE_MARKER_PATTERN.finditer(
+                normalize_text(body_text)
+            )
+        )
+    )
+
+    return [
+        f"{label}の記載があります"
+        for keyword, label
+        in keyword_labels.items()
+        if keyword in scoped_text
+        and not (
+            has_settled_result
+            and not has_target_marker
+            and keyword
+            in ("中止", "不成立")
+        )
+    ]
+
+
+def detect_duplicate_top_positions(
+    page: Any,
+) -> bool:
+    tables = page.locator("table")
+
+    for table_index in range(tables.count()):
+        rows = tables.nth(table_index).locator(
+            "tr"
+        )
+
+        if rows.count() < 2:
+            continue
+
+        try:
+            headers = [
+                normalize_text(value).replace(
+                    "\n",
+                    "",
+                )
+                for value in rows.nth(0)
+                .locator("th, td")
+                .all_inner_texts()
+            ]
+        except Exception:
+            continue
+
+        try:
+            position_index = next(
+                index
+                for index, value
+                in enumerate(headers)
+                if value in ("着", "着順", "順位")
+            )
+        except StopIteration:
+            continue
+
+        positions: list[int] = []
+
+        for row_index in range(
+            1,
+            rows.count(),
+        ):
+            try:
+                cells = [
+                    normalize_text(value)
+                    for value in rows.nth(
+                        row_index
+                    )
+                    .locator("th, td")
+                    .all_inner_texts()
+                ]
+            except Exception:
+                continue
+
+            if position_index >= len(cells):
+                continue
+
+            position = parse_integer(
+                cells[position_index]
+            )
+
+            if position in (1, 2, 3):
+                positions.append(position)
+
+        if len(positions) != len(
+            set(positions)
+        ):
+            return True
+
+    return False
+
+
 def fetch_result(
     *,
     race_url: str,
@@ -375,15 +606,30 @@ def fetch_result(
     ]
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True,
-            channel="chrome",
-            args=[
+        launch_options = {
+            "headless": True,
+            "args": [
                 "--disable-background-timer-throttling",
                 "--disable-renderer-backgrounding",
                 "--disable-backgrounding-occluded-windows",
             ],
-        )
+        }
+
+        try:
+            browser = playwright.chromium.launch(
+                channel="chrome",
+                **launch_options,
+            )
+            logs.append(
+                "ブラウザ: システムのGoogle Chrome"
+            )
+        except Exception:
+            browser = playwright.chromium.launch(
+                **launch_options,
+            )
+            logs.append(
+                "ブラウザ: Playwright Chromium"
+            )
 
         context = browser.new_context(
             locale="ja-JP",
@@ -443,8 +689,26 @@ def fetch_result(
         body_text = normalize_text(
             page.locator("body").inner_text()
         )
+        race_number = (
+            extract_race_number_from_url(
+                result_url
+            )
+        )
+        scoped_body_text = (
+            extract_race_scoped_text(
+                body_text,
+                race_number,
+            )
+        )
 
-        if page_is_unsettled(body_text):
+        if race_number is not None:
+            logs.append(
+                f"判定対象レース: {race_number}R"
+            )
+
+        if page_is_unsettled(
+            scoped_body_text
+        ):
             browser.close()
 
             return {
@@ -465,10 +729,67 @@ def fetch_result(
         if not finish_order:
             finish_order = (
                 extract_finish_order_from_text(
-                    body_text,
+                    scoped_body_text,
                     valid_cars,
                 )
             )
+
+        trifecta_rows, payout_ambiguous = (
+            extract_trifecta_rows_from_tables(
+                page
+            )
+        )
+        has_settled_result = (
+            len(finish_order) == 3
+            and len(trifecta_rows) == 1
+            and not payout_ambiguous
+        )
+        review_reasons = (
+            detect_manual_review_reasons(
+                body_text,
+                race_number=race_number,
+                has_settled_result=(
+                    has_settled_result
+                ),
+            )
+        )
+
+        if detect_duplicate_top_positions(
+            page
+        ):
+            review_reasons.append(
+                "1〜3着に同順位があります"
+            )
+
+        if payout_ambiguous:
+            review_reasons.append(
+                "3連単の組番と払戻を"
+                "一意に対応付けできません"
+            )
+
+        if len(trifecta_rows) > 1:
+            review_reasons.append(
+                "3連単の払戻が複数あります"
+            )
+
+        if review_reasons:
+            unique_reasons = list(
+                dict.fromkeys(review_reasons)
+            )
+
+            browser.close()
+
+            return {
+                "success": True,
+                "status": "review",
+                "message": (
+                    "自動確定せず要確認として保存します。"
+                ),
+                "review_reasons": unique_reasons,
+                "trifecta_rows": trifecta_rows,
+                "result_url": result_url,
+                "logs": logs,
+            }
 
         if len(finish_order) != 3:
             browser.close()
@@ -489,59 +810,47 @@ def fetch_result(
             for number in finish_order
         )
 
-        trifecta_table_result = (
-            extract_trifecta_from_tables(
-                page
-            )
-        )
-
-        if trifecta_table_result:
-            table_combination, payout = (
-                trifecta_table_result
-            )
-
-            if (
-                table_combination
-                != winning_combination
-            ):
-                browser.close()
-
-                return {
-                    "success": False,
-                    "status": "validation_error",
-                    "message": (
-                        "着順表と3連単払戻表の"
-                        "組番が一致しません。"
-                    ),
-                    "finish_order": finish_order,
-                    "winning_combination": (
-                        winning_combination
-                    ),
-                    "payout_combination": (
-                        table_combination
-                    ),
-                    "result_url": result_url,
-                    "logs": logs,
-                }
-        else:
-            payout = extract_trifecta_payout(
-                body_text,
-                winning_combination,
-            )
-
-        if payout is None:
+        if len(trifecta_rows) != 1:
             browser.close()
 
             return {
                 "success": False,
                 "status": "parse_error",
                 "message": (
-                    "3連単払戻を"
+                    "3連単払戻表を一意に"
                     "特定できませんでした。"
                 ),
                 "finish_order": finish_order,
                 "winning_combination": (
                     winning_combination
+                ),
+                "result_url": result_url,
+                "logs": logs,
+            }
+
+        table_combination = str(
+            trifecta_rows[0]["combination"]
+        )
+        payout = int(
+            trifecta_rows[0]["payout_per_100"]
+        )
+
+        if table_combination != winning_combination:
+            browser.close()
+
+            return {
+                "success": False,
+                "status": "validation_error",
+                "message": (
+                    "着順表と3連単払戻表の"
+                    "組番が一致しません。"
+                ),
+                "finish_order": finish_order,
+                "winning_combination": (
+                    winning_combination
+                ),
+                "payout_combination": (
+                    table_combination
                 ),
                 "result_url": result_url,
                 "logs": logs,

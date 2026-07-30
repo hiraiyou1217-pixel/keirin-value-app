@@ -19,6 +19,7 @@ RACE_URL_RE = re.compile(
 VENUE_NAMES = {
     "hakodate": "函館競輪",
     "aomori": "青森競輪",
+    "iwakidaira": "いわき平競輪",
     "iwakitaira": "いわき平競輪",
     "yahiko": "弥彦競輪",
     "maebashi": "前橋競輪",

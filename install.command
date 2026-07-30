@@ -6,7 +6,16 @@ echo "=== 競輪アプリ セットアップ／更新 ==="
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "Python3が見つかりません。"
-  echo "Python 3.11以上をインストールしてください。"
+  echo "Python 3.12または3.13をインストールしてください。"
+  read -p "Enterキーで終了します"
+  exit 1
+fi
+
+PYTHON_VERSION="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+
+if [ "$PYTHON_VERSION" != "3.12" ] && [ "$PYTHON_VERSION" != "3.13" ]; then
+  echo "現在のPythonは $PYTHON_VERSION です。"
+  echo "Python 3.12または3.13を使用してください。"
   read -p "Enterキーで終了します"
   exit 1
 fi

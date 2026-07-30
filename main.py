@@ -26,6 +26,7 @@ from lineup_browser import fetch_lineup_browser
 from lineup_from_comments import (
     infer_lineup_from_comments,
     merge_dom_order_with_comment_groups,
+    select_authoritative_lineup,
 )
 from auto_score import build_automatic_scores
 from race_catalog import fetch_race_catalog
@@ -37,7 +38,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.8.9：オッズ完全性優先版")
+st.caption("Ver.1.13.0：自己評価の着順確率表示版")
 
 
 def make_csv(
@@ -187,6 +188,8 @@ defaults = {
     "plan_maximum_bets": 10,
     "plan_maximum_ratio": 0.25,
     "plan_minimum_unit": 100,
+    "current_collection_scope": "",
+    "current_collection_message": "",
 }
 
 for key, default in defaults.items():
@@ -263,12 +266,39 @@ if catalog:
     )
 
     if st.button(
-        "3連単オッズを取得",
+        "レースデータを取得",
         type="primary",
+        help=(
+            "オッズ・出走表・選手・並びを取得します。"
+            "オッズ非表示時も独立AI用データの"
+            "取得は継続します。"
+        ),
     ):
+        st.session_state.odds = []
+        st.session_state.odds_logs = []
         st.session_state.rider_data = []
         st.session_state.rider_logs = []
         st.session_state.automatic_scores = {}
+        st.session_state.lineup_groups = []
+        st.session_state.lineup_logs = []
+        st.session_state.expected_values = []
+        st.session_state.current_collection_scope = ""
+        st.session_state.current_collection_message = ""
+
+        st.session_state.selected_date = (
+            selected_date
+        )
+        st.session_state.selected_venue = venue
+        st.session_state.selected_race_number = (
+            int(selected_race["race_number"])
+        )
+        st.session_state.selected_race_url = str(
+            selected_race["url"]
+        )
+        st.session_state.race_title = (
+            f"{venue} {selected_label}"
+        )
+
         try:
             with st.spinner(
                 "全3連単オッズを取得しています"
@@ -279,15 +309,52 @@ if catalog:
                     )
                 )
 
-            st.session_state.odds = odds
             st.session_state.odds_logs = logs
-            st.session_state.expected_values = []
+            odds_complete = any(
+                str(log).strip()
+                == "オッズデータ完全性: OK"
+                for log in logs
+            )
+            st.session_state.odds = (
+                odds
+                if odds_complete
+                else []
+            )
 
+        except Exception as exc:
+            st.session_state.odds = []
+            st.session_state.odds_logs = [
+                "オッズ取得Workerで例外が"
+                "発生しました。",
+                f"{type(exc).__name__}: {exc}",
+            ]
+
+        if not st.session_state.odds:
+            st.session_state.odds_logs.extend(
+                [
+                    (
+                        "オッズ状態: 非表示または"
+                        "完全データ未取得"
+                    ),
+                    (
+                        "オッズ非依存AI用の"
+                        "出走表・並び取得を継続します。"
+                    ),
+                ]
+            )
+
+        try:
             rider_data, rider_logs = (
                 fetch_racecard_data_browser(
                     selected_race["url"]
                 )
             )
+
+            if not rider_data:
+                raise RuntimeError(
+                    "出走表・選手データを"
+                    "取得できませんでした。"
+                )
 
             st.session_state.rider_data = rider_data
             st.session_state.rider_logs = rider_logs
@@ -316,8 +383,6 @@ if catalog:
                 )
             )
 
-            # コメントから2車以上のラインを取得できた場合は
-            # DOMの数字列解析より優先する。
             merged_lineup_groups, merge_logs = (
                 merge_dom_order_with_comment_groups(
                     dom_lineup_groups,
@@ -326,43 +391,173 @@ if catalog:
                 )
             )
 
-            meaningful_merged_groups = [
-                group
-                for group in merged_lineup_groups
-                if len(group) >= 2
+            (
+                lineup_groups,
+                lineup_metadata,
+                selection_logs,
+            ) = select_authoritative_lineup(
+                dom_lineup_groups,
+                comment_lineup_groups,
+                rider_numbers_for_lineup,
+            )
+            rider_data = [
+                {
+                    **rider,
+                    **lineup_metadata,
+                }
+                for rider in rider_data
+            ]
+            st.session_state.rider_data = (
+                rider_data
+            )
+            adopted_numbers = [
+                int(number)
+                for group in lineup_groups
+                for number in group
             ]
 
-            if meaningful_merged_groups:
-                # 現在のDOM解析は数字の境界を保持できないため、
-                # 安全性を優先してコメント解析を採用する。
-                lineup_groups = comment_lineup_groups
-                lineup_logs = (
-                    dom_lineup_logs
-                    + comment_lineup_logs
-                    + merge_logs
-                    + [
-                        "DOM統合結果は参考表示のみ",
-                        "採用並び: コメント解析",
-                    ]
+            if (
+                len(adopted_numbers)
+                != len(set(adopted_numbers))
+                or set(adopted_numbers)
+                != set(rider_numbers_for_lineup)
+            ):
+                raise RuntimeError(
+                    "採用並びが出走車番と"
+                    "一致しませんでした。"
                 )
-            else:
-                lineup_groups = comment_lineup_groups
-                lineup_logs = (
-                    dom_lineup_logs
-                    + comment_lineup_logs
-                    + merge_logs
-                    + ["採用並び: コメント解析"]
+
+            adopted_lineup_text = " / ".join(
+                "-".join(
+                    str(number)
+                    for number in group
                 )
+                for group in lineup_groups
+            )
+            reference_lineup_text = " / ".join(
+                "-".join(
+                    str(number)
+                    for number in group
+                )
+                for group in merged_lineup_groups
+            )
+            lineup_logs = (
+                dom_lineup_logs
+                + comment_lineup_logs
+                + merge_logs
+                + selection_logs
+                + [
+                    (
+                        "DOM統合参考結果: "
+                        f"{reference_lineup_text}"
+                    ),
+                    (
+                        "採用並び（保存・予測に使用）: "
+                        f"{adopted_lineup_text}"
+                    ),
+                ]
+            )
 
             st.session_state.lineup_groups = lineup_groups
             st.session_state.lineup_logs = lineup_logs
 
+            save_current_race_snapshot(
+                odds_rows=st.session_state.odds,
+                riders=rider_data,
+                lineup_groups=lineup_groups,
+                odds_logs=(
+                    st.session_state.odds_logs
+                ),
+                race_date=selected_date,
+                venue=venue,
+                race_number=int(
+                    selected_race[
+                        "race_number"
+                    ]
+                ),
+                race_url=str(
+                    selected_race["url"]
+                ),
+                race_title=(
+                    f"{venue} {selected_label}"
+                ),
+            )
+
+            if st.session_state.odds:
+                st.session_state[
+                    "current_collection_scope"
+                ] = "full"
+                st.session_state[
+                    "current_collection_message"
+                ] = (
+                    f"選手{len(rider_data)}人・並び・"
+                    "完全オッズを取得しました。"
+                )
+            else:
+                st.session_state[
+                    "current_collection_scope"
+                ] = "independent"
+                st.session_state[
+                    "current_collection_message"
+                ] = (
+                    f"選手{len(rider_data)}人と並びを"
+                    "取得しました。オッズ非表示のため、"
+                    "オッズ非依存AI用として保存しました。"
+                )
+
         except Exception as exc:
-            st.session_state.odds = []
-            st.session_state.odds_logs = [
-                f"オッズ取得エラー: "
+            st.session_state[
+                "current_collection_scope"
+            ] = "error"
+            st.session_state[
+                "current_collection_message"
+            ] = (
+                "出走表・並び取得エラー: "
                 f"{type(exc).__name__}: {exc}"
-            ]
+            )
+
+    loaded_race_url = str(
+        st.session_state.get(
+            "selected_race_url",
+            "",
+        )
+    )
+    selected_race_is_loaded = (
+        loaded_race_url
+        == str(selected_race["url"])
+    )
+    collection_scope = (
+        st.session_state.get(
+            "current_collection_scope",
+            "",
+        )
+        if selected_race_is_loaded
+        else ""
+    )
+    collection_message = (
+        st.session_state.get(
+            "current_collection_message",
+            "",
+        )
+        if selected_race_is_loaded
+        else ""
+    )
+
+    if (
+        collection_scope == "independent"
+        and collection_message
+    ):
+        st.info(collection_message)
+    elif (
+        collection_scope == "full"
+        and collection_message
+    ):
+        st.success(collection_message)
+    elif (
+        collection_scope == "error"
+        and collection_message
+    ):
+        st.error(collection_message)
 
 
 odds = st.session_state.odds
@@ -708,10 +903,20 @@ with st.form(
     scores: dict[int, float] = {}
 
     if not riders:
-        st.warning(
-            "選手データがありません。"
-            "先にメイン画面でオッズと出走表を取得してください。"
-        )
+        if st.session_state.rider_data:
+            st.info(
+                "オッズが非表示のため、"
+                "期待値計算は利用できません。"
+                "「オッズ非依存AI」ページでは"
+                "取得済みの選手・並びを使えます。"
+            )
+        else:
+            st.warning(
+                "選手データがありません。"
+                "先にメイン画面で"
+                "「レースデータを取得」を"
+                "押してください。"
+            )
 
         score_columns = []
     else:
