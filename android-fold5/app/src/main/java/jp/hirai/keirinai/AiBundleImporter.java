@@ -15,8 +15,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
@@ -271,10 +271,7 @@ public final class AiBundleImporter {
             MANIFEST_FILENAME
         );
         JSONObject manifest = new JSONObject(
-            Files.readString(
-                manifestFile.toPath(),
-                StandardCharsets.UTF_8
-            )
+            readUtf8(manifestFile)
         );
 
         if (
@@ -353,12 +350,11 @@ public final class AiBundleImporter {
         }
 
         JSONObject model = new JSONObject(
-            Files.readString(
+            readUtf8(
                 new File(
                     stage,
                     MODEL_FILENAME
-                ).toPath(),
-                StandardCharsets.UTF_8
+                )
             )
         );
 
@@ -502,12 +498,40 @@ public final class AiBundleImporter {
         }
 
         JSONObject manifest = new JSONObject(
-            Files.readString(
-                manifestFile.toPath(),
-                StandardCharsets.UTF_8
-            )
+            readUtf8(manifestFile)
         );
         return new ImportResult(manifest);
+    }
+
+    private static String readUtf8(
+        File file
+    ) throws IOException {
+        StringBuilder output =
+            new StringBuilder();
+        char[] buffer = new char[16 * 1024];
+
+        try (
+            InputStreamReader reader =
+                new InputStreamReader(
+                    new FileInputStream(file),
+                    StandardCharsets.UTF_8
+                )
+        ) {
+            int count;
+
+            while (
+                (count = reader.read(buffer))
+                != -1
+            ) {
+                output.append(
+                    buffer,
+                    0,
+                    count
+                );
+            }
+        }
+
+        return output.toString();
     }
 
     public static boolean isReady(
