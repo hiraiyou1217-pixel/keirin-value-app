@@ -169,6 +169,11 @@
                 carNumber,
                 name: profileLines[0] || profileText,
                 profile: profileLines.slice(1).join(" "),
+                cyclistUrl: (
+                    row.querySelector(
+                        'a[href*="/keirin/cyclist/"]'
+                    ) || {}
+                ).href || "",
                 aiMark: cell(cells, positions.ai),
                 score: parseNumber(
                     cell(cells, positions.score)
@@ -355,7 +360,12 @@
             positions,
             riders: uniqueRiders,
             lineupText,
-            lineupItems
+            lineupItems,
+            bodyText: clean(
+                document.body
+                    ? document.body.innerText
+                    : ""
+            ).slice(0, 250000)
         });
     } catch (error) {
         return JSON.stringify({

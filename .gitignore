@@ -17,3 +17,5 @@ models/*_metadata.json
 android-fold5/.gradle/
 android-fold5/**/build/
 android-fold5/local.properties
+android-fold5/app/src/main/python/generated_sources/
+exports/

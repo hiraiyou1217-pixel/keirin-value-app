@@ -35,13 +35,23 @@ source .venv/bin/activate
 python -m streamlit run main.py
 ```
 
-## Android本体実行の検証
+## Galaxy Z Fold5 端末内AI
 
-Galaxy Z Fold5（Android 14）でWINTICKETの個別出走表を直接読み取る
-検証アプリは `android-fold5` に分離しています。既存のmacOS版とは
-起動・保存先ともに独立しています。現在は選手・コメント・並び候補の
-取得検証段階で、取得成功後にオッズ非依存AIモデルを移植します。
-ビルドと実機確認は `android-fold5/README.md` を参照してください。
+Galaxy Z Fold5（Android 14）では、WINTICKETの開催一覧・個別出走表を
+アプリ内で取得し、学習済みオッズ非依存AIをスマホ本体だけで実行できます。
+モデルと学習DBは公開GitHubやAPKへ含めません。Macで検証済みの非公開ZIPを
+作り、Google DriveまたはUSBなどでGalaxyへ渡してアプリ内へ取り込みます。
+
+```bash
+cd ~/Documents/GitHub/keirin-value-app
+source .venv/bin/activate
+python export_android_ai_bundle.py
+```
+
+出力は `exports/keirin_android_ai_bundle.zip` です。変換時にMac版モデルと
+端末用モデルの確率を比較し、SQLite整合性、ファイルサイズ、SHA-256を
+記録します。一致しない場合はZIPを作成しません。詳しいAPK更新・取込・
+操作手順は `android-fold5/README.md` を参照してください。
 
 ## 過去レース収集
 

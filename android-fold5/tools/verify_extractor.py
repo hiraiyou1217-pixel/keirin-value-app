@@ -16,6 +16,14 @@ SCRIPT_PATH = (
     / "assets"
     / "extract_racecard.js"
 )
+CATALOG_SCRIPT_PATH = (
+    ROOT
+    / "app"
+    / "src"
+    / "main"
+    / "assets"
+    / "extract_catalog.js"
+)
 
 
 def _row(
@@ -150,6 +158,26 @@ def main() -> None:
         payload = json.loads(
             page.evaluate(script)
         )
+        page.set_content(
+            """
+            <a href="https://www.winticket.jp/keirin/aomori/racecard/2026073012/1/1">
+              青森 1R
+            </a>
+            <a href="https://www.winticket.jp/keirin/aomori/racecard/2026073012/1/2">
+              青森 2R
+            </a>
+            <a href="https://example.com/not-a-race">
+              対象外
+            </a>
+            """
+        )
+        catalog_payload = json.loads(
+            page.evaluate(
+                CATALOG_SCRIPT_PATH.read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
         browser.close()
 
     assert payload["ok"] is True
@@ -162,6 +190,12 @@ def main() -> None:
         "7番のコメント。"
     )
     assert len(payload["lineupItems"]) == 7
+    assert catalog_payload["ok"] is True
+    assert len(catalog_payload["races"]) == 2
+    assert (
+        catalog_payload["races"][0]["venue"]
+        == "青森競輪"
+    )
     print(
         json.dumps(
             {
@@ -171,6 +205,9 @@ def main() -> None:
                 ),
                 "lineup_items": len(
                     payload["lineupItems"]
+                ),
+                "catalog_races": len(
+                    catalog_payload["races"]
                 ),
                 "omitted_frame_cell": True,
             },
