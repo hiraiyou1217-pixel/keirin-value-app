@@ -142,6 +142,10 @@ def export_hist_gradient_boosting_package(
         "baseline": baseline,
         "trees": trees,
         "tree_count": len(trees),
+        "calibration": package.get(
+            "probability_calibration",
+            {"method": "identity"},
+        ),
         "metadata": metadata,
     }
 
@@ -184,6 +188,47 @@ def _sigmoid(value: float) -> float:
 
     positive = math.exp(value)
     return positive / (1.0 + positive)
+
+
+def apply_probability_calibration(
+    probabilities: Iterable[float],
+    calibration: dict[str, Any] | None,
+) -> list[float]:
+    values = [
+        min(
+            1.0 - 1e-15,
+            max(1e-15, float(value)),
+        )
+        for value in probabilities
+    ]
+
+    if (
+        not calibration
+        or calibration.get("method")
+        != "platt_logit"
+    ):
+        return values
+
+    coefficient = float(
+        calibration.get("coefficient", 1.0)
+    )
+    intercept = float(
+        calibration.get("intercept", 0.0)
+    )
+    output: list[float] = []
+
+    for value in values:
+        logit = math.log(
+            value / (1.0 - value)
+        )
+        output.append(
+            _sigmoid(
+                coefficient * logit
+                + intercept
+            )
+        )
+
+    return output
 
 
 def predict_positive_probabilities(
@@ -237,4 +282,7 @@ def predict_positive_probabilities(
 
         output.append(_sigmoid(raw_value))
 
-    return output
+    return apply_probability_calibration(
+        output,
+        portable_model.get("calibration"),
+    )

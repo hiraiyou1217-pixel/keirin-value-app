@@ -16,6 +16,7 @@ import numpy as np
 
 from learning_database import DATABASE_PATH
 from portable_independent_model import (
+    apply_probability_calibration,
     export_hist_gradient_boosting_package,
     predict_positive_probabilities,
 )
@@ -259,9 +260,17 @@ def validate_portable_model(
     portable_model: dict[str, Any],
 ) -> dict[str, Any]:
     rows = _validation_rows(portable_model)
-    expected = package["model"].predict_proba(
-        rows
-    )[:, 1]
+    expected = np.asarray(
+        apply_probability_calibration(
+            package["model"].predict_proba(
+                rows
+            )[:, 1],
+            package.get(
+                "probability_calibration"
+            ),
+        ),
+        dtype=float,
+    )
     actual = np.asarray(
         predict_positive_probabilities(
             portable_model,

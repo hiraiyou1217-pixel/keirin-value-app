@@ -12,6 +12,9 @@ import pandas as pd
 from sklearn.ensemble import (
     HistGradientBoostingClassifier,
 )
+from sklearn.linear_model import (
+    LogisticRegression,
+)
 from sklearn.model_selection import (
     TimeSeriesSplit,
 )
@@ -26,6 +29,9 @@ from independent_learning_features import (
 from learning_database import (
     DATABASE_PATH,
     initialize_database,
+)
+from portable_independent_model import (
+    apply_probability_calibration,
 )
 
 
@@ -44,7 +50,7 @@ INDEPENDENT_METADATA_PATH = (
         "model_metadata.json"
     )
 )
-MODEL_VERSION = 3
+MODEL_VERSION = 4
 
 
 def _positive_class_probability(
@@ -166,6 +172,7 @@ def evaluate_independent_predictions(
     top1_hits = 0
     top5_hits = 0
     top10_hits = 0
+    top30_hits = 0
     first_place_hits = 0
     winner_ranks: list[int] = []
     winner_probabilities: list[float] = []
@@ -213,6 +220,9 @@ def evaluate_independent_predictions(
         )
         top10_hits += int(
             winner_rank <= 10
+        )
+        top30_hits += int(
+            winner_rank <= 30
         )
 
         actual_first = int(
@@ -276,6 +286,11 @@ def evaluate_independent_predictions(
             if evaluated_races
             else 0.0
         ),
+        "top30_hit_rate": (
+            top30_hits / evaluated_races
+            if evaluated_races
+            else 0.0
+        ),
         "first_place_hit_rate": (
             first_place_hits
             / evaluated_races
@@ -293,6 +308,403 @@ def evaluate_independent_predictions(
             else 0.0
         ),
         "race_log_loss": race_log_loss,
+    }
+
+
+def fit_probability_calibration(
+    raw_probabilities: np.ndarray,
+    targets: np.ndarray,
+) -> dict[str, Any]:
+    clipped = np.clip(
+        np.asarray(
+            raw_probabilities,
+            dtype=float,
+        ),
+        1e-15,
+        1.0 - 1e-15,
+    )
+    labels = np.asarray(
+        targets,
+        dtype=int,
+    )
+
+    if (
+        len(clipped) == 0
+        or len(np.unique(labels)) < 2
+    ):
+        return {
+            "method": "identity",
+            "sample_count": int(
+                len(clipped)
+            ),
+            "reason": (
+                "校正に必要な2クラスが"
+                "揃っていません。"
+            ),
+        }
+
+    logits = np.log(
+        clipped / (1.0 - clipped)
+    ).reshape(-1, 1)
+    calibrator = LogisticRegression(
+        C=1.0,
+        solver="lbfgs",
+        max_iter=1000,
+        random_state=42,
+    )
+    calibrator.fit(logits, labels)
+    coefficient = float(
+        calibrator.coef_[0][0]
+    )
+
+    if coefficient <= 0.0:
+        return {
+            "method": "identity",
+            "sample_count": int(
+                len(clipped)
+            ),
+            "positive_count": int(
+                labels.sum()
+            ),
+            "reason": (
+                "校正係数が正でないため"
+                "順位反転を避けて未校正を採用"
+            ),
+        }
+
+    return {
+        "method": "platt_logit",
+        "coefficient": coefficient,
+        "intercept": float(
+            calibrator.intercept_[0]
+        ),
+        "sample_count": int(
+            len(clipped)
+        ),
+        "positive_count": int(
+            labels.sum()
+        ),
+    }
+
+
+def calibration_quality(
+    targets: np.ndarray,
+    before: np.ndarray,
+    after: np.ndarray,
+) -> dict[str, float]:
+    labels = np.asarray(
+        targets,
+        dtype=float,
+    )
+    before_values = np.clip(
+        np.asarray(before, dtype=float),
+        1e-15,
+        1.0 - 1e-15,
+    )
+    after_values = np.clip(
+        np.asarray(after, dtype=float),
+        1e-15,
+        1.0 - 1e-15,
+    )
+
+    def binary_log_loss(
+        values: np.ndarray,
+    ) -> float:
+        return float(
+            -np.mean(
+                labels * np.log(values)
+                + (
+                    1.0 - labels
+                )
+                * np.log(1.0 - values)
+            )
+        )
+
+    return {
+        "binary_log_loss_before": (
+            binary_log_loss(
+                before_values
+            )
+        ),
+        "binary_log_loss_after": (
+            binary_log_loss(
+                after_values
+            )
+        ),
+        "brier_score_before": float(
+            np.mean(
+                (
+                    before_values
+                    - labels
+                )
+                ** 2
+            )
+        ),
+        "brier_score_after": float(
+            np.mean(
+                (
+                    after_values
+                    - labels
+                )
+                ** 2
+            )
+        ),
+    }
+
+
+def evaluate_segmented_predictions(
+    dataframe: pd.DataFrame,
+    probabilities: np.ndarray,
+) -> dict[str, list[dict[str, Any]]]:
+    race_rows = (
+        dataframe.reset_index(drop=True)
+        .drop_duplicates("race_id")
+        .set_index("race_id")
+    )
+    grade_names = {
+        0: "不明",
+        1: "F2",
+        2: "F1",
+        3: "G3",
+        4: "G2",
+        5: "G1",
+        6: "GP",
+    }
+    conditions: dict[
+        str,
+        dict[str, str]
+    ] = {
+        "競輪場": {
+            race_id: str(row["venue"])
+            for race_id, row
+            in race_rows.iterrows()
+        },
+        "出走数": {
+            race_id: (
+                f"{int(row['rider_count'])}車"
+            )
+            for race_id, row
+            in race_rows.iterrows()
+        },
+        "グレード": {
+            race_id: grade_names.get(
+                int(
+                    round(
+                        float(
+                            row[
+                                "race_grade_ordinal"
+                            ]
+                        )
+                    )
+                ),
+                "不明",
+            )
+            for race_id, row
+            in race_rows.iterrows()
+        },
+        "発走帯": {
+            race_id: (
+                "時刻不明"
+                if not bool(
+                    row[
+                        "scheduled_start_known"
+                    ]
+                )
+                else (
+                    "午前"
+                    if float(
+                        row[
+                            "scheduled_start_hour"
+                        ]
+                    )
+                    < 12
+                    else (
+                        "午後"
+                        if float(
+                            row[
+                                "scheduled_start_hour"
+                            ]
+                        )
+                        < 17
+                        else "ナイター"
+                    )
+                )
+            )
+            for race_id, row
+            in race_rows.iterrows()
+        },
+        "並び信頼度": {
+            race_id: (
+                "高"
+                if float(
+                    row["lineup_confidence"]
+                )
+                >= 0.85
+                else (
+                    "中"
+                    if float(
+                        row[
+                            "lineup_confidence"
+                        ]
+                    )
+                    >= 0.60
+                    else "低"
+                )
+            )
+            for race_id, row
+            in race_rows.iterrows()
+        },
+    }
+    output: dict[
+        str,
+        list[dict[str, Any]]
+    ] = {}
+    race_ids = dataframe[
+        "race_id"
+    ].astype(str)
+
+    for dimension, labels in (
+        conditions.items()
+    ):
+        rows: list[dict[str, Any]] = []
+
+        for label in sorted(
+            set(labels.values())
+        ):
+            selected_races = {
+                race_id
+                for race_id, value
+                in labels.items()
+                if value == label
+            }
+            mask = race_ids.isin(
+                selected_races
+            ).to_numpy()
+            metrics = (
+                evaluate_independent_predictions(
+                    dataframe.loc[
+                        mask
+                    ].reset_index(drop=True),
+                    np.asarray(
+                        probabilities
+                    )[mask],
+                )
+            )
+            rows.append(
+                {
+                    "condition": label,
+                    **metrics,
+                }
+            )
+
+        output[dimension] = rows
+
+    return output
+
+
+def decide_model_promotion(
+    candidate: dict[str, Any],
+    incumbent: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not incumbent:
+        return {
+            "promoted": True,
+            "decision": "initial_model",
+            "reason": (
+                "有効な現行モデルがないため"
+                "初回モデルとして採用"
+            ),
+            "checks": {},
+        }
+
+    required = (
+        "race_log_loss",
+        "mean_winner_rank",
+        "top10_hit_rate",
+    )
+
+    if any(
+        key not in incumbent
+        for key in required
+    ):
+        return {
+            "promoted": True,
+            "decision": (
+                "incumbent_metrics_missing"
+            ),
+            "reason": (
+                "現行モデルに比較指標がないため"
+                "検証済み候補を採用"
+            ),
+            "checks": {},
+        }
+
+    candidate_loss = float(
+        candidate["race_log_loss"]
+    )
+    incumbent_loss = float(
+        incumbent["race_log_loss"]
+    )
+    candidate_rank = float(
+        candidate["mean_winner_rank"]
+    )
+    incumbent_rank = float(
+        incumbent["mean_winner_rank"]
+    )
+    candidate_top10 = float(
+        candidate["top10_hit_rate"]
+    )
+    incumbent_top10 = float(
+        incumbent["top10_hit_rate"]
+    )
+    checks = {
+        "log_loss_guardrail": (
+            candidate_loss
+            <= incumbent_loss * 1.02
+        ),
+        "winner_rank_guardrail": (
+            candidate_rank
+            <= incumbent_rank + 1.0
+        ),
+        "top10_guardrail": (
+            candidate_top10
+            >= incumbent_top10 - 0.01
+        ),
+        "at_least_one_improvement": (
+            candidate_loss < incumbent_loss
+            or candidate_rank
+            < incumbent_rank
+            or candidate_top10
+            > incumbent_top10
+        ),
+    }
+    promoted = all(checks.values())
+
+    return {
+        "promoted": promoted,
+        "decision": (
+            "promote"
+            if promoted
+            else "keep_incumbent"
+        ),
+        "reason": (
+            "主要3指標の悪化上限を守り、"
+            "少なくとも1指標が改善"
+            if promoted
+            else (
+                "現行モデルより客観指標が"
+                "改善しなかったため候補保存"
+            )
+        ),
+        "checks": checks,
+        "candidate": {
+            key: float(candidate[key])
+            for key in required
+        },
+        "incumbent": {
+            key: float(incumbent[key])
+            for key in required
+        },
     }
 
 
@@ -610,14 +1022,56 @@ def train_independent_model(
             evaluated_mask
         ]
     )
-    evaluation_probabilities = (
+    uncalibrated_probabilities = (
         normalize_by_race(
             evaluation_frame,
             evaluation_raw,
         )
     )
+    probability_calibration = (
+        fit_probability_calibration(
+            evaluation_raw,
+            evaluation_frame[
+                "target"
+            ].to_numpy(),
+        )
+    )
+    calibrated_raw = np.asarray(
+        apply_probability_calibration(
+            evaluation_raw,
+            probability_calibration,
+        ),
+        dtype=float,
+    )
+    evaluation_probabilities = (
+        normalize_by_race(
+            evaluation_frame,
+            calibrated_raw,
+        )
+    )
+    uncalibrated_metrics = (
+        evaluate_independent_predictions(
+            evaluation_frame,
+            uncalibrated_probabilities,
+        )
+    )
     evaluation_metrics = (
         evaluate_independent_predictions(
+            evaluation_frame,
+            evaluation_probabilities,
+        )
+    )
+    calibration_metrics = (
+        calibration_quality(
+            evaluation_frame[
+                "target"
+            ].to_numpy(),
+            evaluation_raw,
+            calibrated_raw,
+        )
+    )
+    segmented_metrics = (
+        evaluate_segmented_predictions(
             evaluation_frame,
             evaluation_probabilities,
         )
@@ -633,10 +1087,6 @@ def train_independent_model(
     metadata_path.parent.mkdir(
         parents=True,
         exist_ok=True,
-    )
-    _backup_existing_models(
-        model_path,
-        metadata_path,
     )
     trained_at = datetime.now().isoformat(
         timespec="seconds"
@@ -669,19 +1119,10 @@ def train_independent_model(
         "feature_coverage": (
             feature_coverage
         ),
+        "probability_calibration": (
+            probability_calibration
+        ),
     }
-    temporary_model_path = (
-        model_path.with_suffix(
-            model_path.suffix + ".tmp"
-        )
-    )
-    joblib.dump(
-        model_package,
-        temporary_model_path,
-    )
-    temporary_model_path.replace(
-        model_path
-    )
 
     metadata = {
         "trained_at": trained_at,
@@ -729,24 +1170,141 @@ def train_independent_model(
             "WINTICKET AI印",
         ],
         **evaluation_metrics,
+        "uncalibrated_evaluation": (
+            uncalibrated_metrics
+        ),
+        "probability_calibration": (
+            probability_calibration
+        ),
+        "calibration_metrics": (
+            calibration_metrics
+        ),
+        "segmented_evaluation": (
+            segmented_metrics
+        ),
         "fold_results": fold_results,
         "feature_columns": feature_columns,
     }
-    temporary_metadata_path = (
-        metadata_path.with_suffix(
-            metadata_path.suffix + ".tmp"
+
+    incumbent_metadata: (
+        dict[str, Any] | None
+    ) = None
+
+    if (
+        model_path.exists()
+        and metadata_path.exists()
+    ):
+        try:
+            loaded_incumbent = json.loads(
+                metadata_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            if isinstance(
+                loaded_incumbent,
+                dict,
+            ):
+                incumbent_metadata = (
+                    loaded_incumbent
+                )
+        except (
+            OSError,
+            json.JSONDecodeError,
+        ):
+            incumbent_metadata = None
+
+    promotion = decide_model_promotion(
+        metadata,
+        incumbent_metadata,
+    )
+    metadata["promotion"] = promotion
+    metadata["promoted"] = bool(
+        promotion["promoted"]
+    )
+    model_package["promotion"] = promotion
+
+    if metadata["promoted"]:
+        _backup_existing_models(
+            model_path,
+            metadata_path,
         )
-    )
-    temporary_metadata_path.write_text(
-        json.dumps(
-            metadata,
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    temporary_metadata_path.replace(
-        metadata_path
-    )
+        temporary_model_path = (
+            model_path.with_suffix(
+                model_path.suffix + ".tmp"
+            )
+        )
+        joblib.dump(
+            model_package,
+            temporary_model_path,
+        )
+        temporary_model_path.replace(
+            model_path
+        )
+        temporary_metadata_path = (
+            metadata_path.with_suffix(
+                metadata_path.suffix + ".tmp"
+            )
+        )
+        temporary_metadata_path.write_text(
+            json.dumps(
+                metadata,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary_metadata_path.replace(
+            metadata_path
+        )
+    else:
+        candidate_directory = (
+            model_path.parent
+            / "candidates"
+        )
+        candidate_directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        candidate_stamp = datetime.now().strftime(
+            "%Y%m%d_%H%M%S_%f"
+        )
+        candidate_model_path = (
+            candidate_directory
+            / (
+                f"{model_path.stem}_"
+                f"{candidate_stamp}"
+                f"{model_path.suffix}"
+            )
+        )
+        candidate_metadata_path = (
+            candidate_directory
+            / (
+                f"{metadata_path.stem}_"
+                f"{candidate_stamp}"
+                f"{metadata_path.suffix}"
+            )
+        )
+        metadata["model_path"] = str(
+            candidate_model_path
+        )
+        metadata["candidate_metadata_path"] = str(
+            candidate_metadata_path
+        )
+        metadata["active_model_path"] = str(
+            model_path
+        )
+        joblib.dump(
+            model_package,
+            candidate_model_path,
+        )
+        candidate_metadata_path.write_text(
+            json.dumps(
+                metadata,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     return metadata

@@ -20,6 +20,7 @@ from export_android_ai_bundle import (
     create_android_ai_bundle,
 )
 from portable_independent_model import (
+    apply_probability_calibration,
     export_hist_gradient_boosting_package,
     predict_positive_probabilities,
 )
@@ -89,6 +90,54 @@ class PortableModelTest(unittest.TestCase):
         expected = package[
             "model"
         ].predict_proba(rows)[:, 1]
+        actual = np.asarray(
+            predict_positive_probabilities(
+                portable,
+                rows,
+            )
+        )
+
+        np.testing.assert_allclose(
+            actual,
+            expected,
+            rtol=1e-12,
+            atol=1e-12,
+        )
+
+    def test_exports_probability_calibration(
+        self,
+    ) -> None:
+        package = _fitted_package()
+        package[
+            "probability_calibration"
+        ] = {
+            "method": "platt_logit",
+            "coefficient": 0.75,
+            "intercept": -0.25,
+        }
+        portable = (
+            export_hist_gradient_boosting_package(
+                package
+            )
+        )
+        rows = np.asarray(
+            [
+                [0.0, 1.0],
+                [3.1, 2.7],
+                [np.nan, 0.0],
+            ]
+        )
+        raw = package[
+            "model"
+        ].predict_proba(rows)[:, 1]
+        expected = np.asarray(
+            apply_probability_calibration(
+                raw,
+                package[
+                    "probability_calibration"
+                ],
+            )
+        )
         actual = np.asarray(
             predict_positive_probabilities(
                 portable,

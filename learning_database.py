@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -2694,6 +2695,232 @@ def get_independent_evaluation_summary(
         ),
         **rates,
     }
+
+
+def get_independent_evaluation_segments(
+) -> list[dict[str, Any]]:
+    sync_independent_prediction_results()
+
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                venue,
+                winning_rank,
+                winning_probability,
+                input_snapshot_json
+            FROM independent_prediction_runs
+            WHERE
+                evaluation_eligible = 1
+                AND result_status = '確定'
+                AND winning_rank IS NOT NULL
+            ORDER BY race_date, race_number
+            """
+        ).fetchall()
+
+    groups: dict[
+        tuple[str, str],
+        list[sqlite3.Row],
+    ] = {}
+
+    for row in rows:
+        try:
+            snapshot = json.loads(
+                str(
+                    row[
+                        "input_snapshot_json"
+                    ]
+                    or "{}"
+                )
+            )
+        except json.JSONDecodeError:
+            snapshot = {}
+
+        conditions = dict(
+            snapshot.get(
+                "race_conditions",
+                {},
+            )
+            or {}
+        )
+        riders = list(
+            snapshot.get("riders", [])
+            or []
+        )
+        grade = str(
+            conditions.get(
+                "レースグレード",
+                conditions.get(
+                    "race_grade",
+                    conditions.get(
+                        "グレード",
+                        "",
+                    ),
+                ),
+            )
+            or "不明"
+        )
+        race_stage = str(
+            conditions.get(
+                "レース区分",
+                conditions.get(
+                    "race_stage",
+                    "",
+                ),
+            )
+            or "不明"
+        )
+        start_time = str(
+            conditions.get(
+                "発走時刻",
+                conditions.get(
+                    "scheduled_start_time",
+                    "",
+                ),
+            )
+            or ""
+        )
+        time_match = re.search(
+            r"(?:^|\D)([01]?\d|2[0-3]):[0-5]\d",
+            start_time,
+        )
+
+        if time_match is None:
+            time_band = "時刻不明"
+        else:
+            hour = int(time_match.group(1))
+            time_band = (
+                "午前"
+                if hour < 12
+                else (
+                    "午後"
+                    if hour < 17
+                    else "ナイター"
+                )
+            )
+
+        confidence_value = conditions.get(
+            "並び信頼度",
+            conditions.get(
+                "lineup_confidence",
+                snapshot.get(
+                    "lineup_confidence",
+                    0.0,
+                ),
+            ),
+        )
+
+        try:
+            confidence = float(
+                confidence_value
+            )
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        confidence_band = (
+            "高"
+            if confidence >= 0.85
+            else (
+                "中"
+                if confidence >= 0.60
+                else "低"
+            )
+        )
+        segments = {
+            "競輪場": str(
+                row["venue"] or "不明"
+            ),
+            "出走数": (
+                f"{len(riders)}車"
+                if riders
+                else "不明"
+            ),
+            "グレード": grade,
+            "レース区分": race_stage,
+            "発走帯": time_band,
+            "並び信頼度": confidence_band,
+        }
+
+        for dimension, condition in (
+            segments.items()
+        ):
+            groups.setdefault(
+                (
+                    dimension,
+                    condition,
+                ),
+                [],
+            ).append(row)
+
+    output: list[dict[str, Any]] = []
+
+    for (
+        dimension,
+        condition,
+    ), segment_rows in groups.items():
+        ranks = [
+            int(row["winning_rank"])
+            for row in segment_rows
+        ]
+        probabilities = [
+            max(
+                1e-15,
+                float(
+                    row[
+                        "winning_probability"
+                    ]
+                    or 0.0
+                ),
+            )
+            for row in segment_rows
+        ]
+        count = len(ranks)
+        output.append(
+            {
+                "dimension": dimension,
+                "condition": condition,
+                "race_count": count,
+                "top1_hit_rate": sum(
+                    rank <= 1
+                    for rank in ranks
+                )
+                / count,
+                "top5_hit_rate": sum(
+                    rank <= 5
+                    for rank in ranks
+                )
+                / count,
+                "top10_hit_rate": sum(
+                    rank <= 10
+                    for rank in ranks
+                )
+                / count,
+                "top30_hit_rate": sum(
+                    rank <= 30
+                    for rank in ranks
+                )
+                / count,
+                "mean_winner_rank": sum(
+                    ranks
+                )
+                / count,
+                "race_log_loss": sum(
+                    -math.log(probability)
+                    for probability
+                    in probabilities
+                )
+                / count,
+            }
+        )
+
+    return sorted(
+        output,
+        key=lambda item: (
+            str(item["dimension"]),
+            -int(item["race_count"]),
+            str(item["condition"]),
+        ),
+    )
 
 
 def get_recent_independent_evaluations(

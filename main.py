@@ -38,7 +38,7 @@ st.set_page_config(
 )
 
 st.title("競輪3連単 妙味期待値アプリ")
-st.caption("Ver.1.14.0：Google Drive直接取込版")
+st.caption("Ver.1.15.0：確率校正・自動昇格・スマホ操作強化版")
 
 
 def make_csv(

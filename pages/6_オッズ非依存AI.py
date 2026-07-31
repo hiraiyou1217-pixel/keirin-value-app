@@ -30,6 +30,7 @@ from independent_model_prediction import (
     predict_independent_race,
 )
 from learning_database import (
+    get_independent_evaluation_segments,
     get_independent_evaluation_summary,
     get_independent_hole_hits,
     get_independent_prediction_detail,
@@ -419,10 +420,18 @@ if train_button:
         st.session_state[
             "independent_training_metadata"
         ] = metadata
-        st.success(
-            "オッズ非依存AIの学習と保存が"
-            "完了しました。"
-        )
+        if metadata.get("promoted", True):
+            st.success(
+                "新モデルは自動昇格判定を"
+                "通過し、正式モデルとして"
+                "保存されました。"
+            )
+        else:
+            st.warning(
+                "新モデルは自動昇格条件を"
+                "満たさなかったため、現行モデルを"
+                "維持し、候補モデルとして保存しました。"
+            )
 
     except Exception as exc:
         st.error(
@@ -450,7 +459,37 @@ if (
         metadata = None
 
 if metadata:
-    st.markdown("#### 最新モデルの時系列評価")
+    st.markdown("#### モデルの時系列評価")
+    promotion = metadata.get(
+        "promotion",
+        {},
+    )
+
+    if promotion:
+        if metadata.get("promoted", True):
+            st.success(
+                "自動昇格判定：採用"
+                "（"
+                + str(
+                    promotion.get(
+                        "reason",
+                        "",
+                    )
+                )
+                + "）"
+            )
+        else:
+            st.warning(
+                "自動昇格判定：現行モデルを維持"
+                "（"
+                + str(
+                    promotion.get(
+                        "reason",
+                        "",
+                    )
+                )
+                + "）"
+            )
 
     evaluation_col1, evaluation_col2, (
         evaluation_col3
@@ -592,6 +631,38 @@ if metadata:
                 feature_coverage,
             )
 
+        calibration = metadata.get(
+            "probability_calibration",
+            {},
+        )
+        calibration_metrics = metadata.get(
+            "calibration_metrics",
+            {},
+        )
+
+        if calibration:
+            st.write(
+                "確率校正：",
+                calibration,
+            )
+
+        if calibration_metrics:
+            st.write(
+                "校正前後の確率指標：",
+                calibration_metrics,
+            )
+
+        promotion_checks = promotion.get(
+            "checks",
+            {},
+        )
+
+        if promotion_checks:
+            st.write(
+                "自動昇格の判定項目：",
+                promotion_checks,
+            )
+
         fold_results = metadata.get(
             "fold_results",
             [],
@@ -603,6 +674,66 @@ if metadata:
                 use_container_width=True,
                 hide_index=True,
             )
+
+    segmented_evaluation = metadata.get(
+        "segmented_evaluation",
+        {},
+    )
+
+    if segmented_evaluation:
+        with st.expander(
+            "時系列検証の条件別評価を表示"
+        ):
+            selected_dimension = st.selectbox(
+                "評価条件",
+                options=list(
+                    segmented_evaluation.keys()
+                ),
+                key=(
+                    "training_segment_dimension"
+                ),
+            )
+            segment_rows = (
+                segmented_evaluation.get(
+                    selected_dimension,
+                    [],
+                )
+            )
+
+            if segment_rows:
+                segment_frame = pd.DataFrame(
+                    segment_rows
+                ).rename(
+                    columns={
+                        "condition": "条件",
+                        "evaluated_race_count": (
+                            "検証レース数"
+                        ),
+                        "top1_hit_rate": (
+                            "Top1"
+                        ),
+                        "top5_hit_rate": (
+                            "Top5"
+                        ),
+                        "top10_hit_rate": (
+                            "Top10"
+                        ),
+                        "top30_hit_rate": (
+                            "Top30"
+                        ),
+                        "mean_winner_rank": (
+                            "平均的中順位"
+                        ),
+                        "race_log_loss": (
+                            "LogLoss"
+                        ),
+                    }
+                )
+                st.dataframe(
+                    segment_frame,
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 else:
     st.caption(
@@ -1523,6 +1654,89 @@ with maximum_payout_col:
             else "-"
         ),
     )
+
+evaluation_segments = (
+    get_independent_evaluation_segments()
+)
+
+if evaluation_segments:
+    with st.expander(
+        "正式評価の条件別成績を表示"
+    ):
+        segment_dimensions = list(
+            dict.fromkeys(
+                str(row["dimension"])
+                for row
+                in evaluation_segments
+            )
+        )
+        selected_official_dimension = (
+            st.selectbox(
+                "集計条件",
+                options=segment_dimensions,
+                key=(
+                    "official_segment_dimension"
+                ),
+            )
+        )
+        official_rows = [
+            row
+            for row in evaluation_segments
+            if row["dimension"]
+            == selected_official_dimension
+        ]
+        official_frame = pd.DataFrame(
+            official_rows
+        ).rename(
+            columns={
+                "condition": "条件",
+                "race_count": "レース数",
+                "top1_hit_rate": "Top1",
+                "top5_hit_rate": "Top5",
+                "top10_hit_rate": "Top10",
+                "top30_hit_rate": "Top30",
+                "mean_winner_rank": (
+                    "平均的中順位"
+                ),
+                "race_log_loss": "LogLoss",
+            }
+        ).drop(
+            columns=["dimension"],
+            errors="ignore",
+        )
+        st.dataframe(
+            official_frame,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Top1": st.column_config.NumberColumn(
+                    format="%.2f"
+                ),
+                "Top5": st.column_config.NumberColumn(
+                    format="%.2f"
+                ),
+                "Top10": st.column_config.NumberColumn(
+                    format="%.2f"
+                ),
+                "Top30": st.column_config.NumberColumn(
+                    format="%.2f"
+                ),
+                "平均的中順位": (
+                    st.column_config.NumberColumn(
+                        format="%.2f"
+                    )
+                ),
+                "LogLoss": (
+                    st.column_config.NumberColumn(
+                        format="%.4f"
+                    )
+                ),
+            },
+        )
+        st.caption(
+            "Top各列は0〜1で表示します。"
+            "レース数が少ない条件は参考値です。"
+        )
 
 recent_evaluations = (
     get_recent_independent_evaluations(

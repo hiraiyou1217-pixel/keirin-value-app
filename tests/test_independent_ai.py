@@ -630,6 +630,28 @@ class IndependentAiTest(unittest.TestCase):
                 "odds_independent"
             ]
         )
+        self.assertTrue(
+            metadata["promoted"]
+        )
+        self.assertIn(
+            metadata[
+                "probability_calibration"
+            ]["method"],
+            (
+                "platt_logit",
+                "identity",
+            ),
+        )
+        self.assertIn(
+            "top30_hit_rate",
+            metadata,
+        )
+        self.assertIn(
+            "競輪場",
+            metadata[
+                "segmented_evaluation"
+            ],
+        )
         self.assertEqual(
             metadata["race_count"],
             8,
@@ -901,6 +923,10 @@ class IndependentAiTest(unittest.TestCase):
             learning_database
             .get_independent_evaluation_summary()
         )
+        segments = (
+            learning_database
+            .get_independent_evaluation_segments()
+        )
         holes = (
             learning_database
             .get_independent_hole_hits()
@@ -940,6 +966,26 @@ class IndependentAiTest(unittest.TestCase):
             27,
         )
         self.assertEqual(len(history), 2)
+        venue_segment = next(
+            row
+            for row in segments
+            if (
+                row["dimension"]
+                == "競輪場"
+                and row["condition"]
+                == "青森競輪"
+            )
+        )
+        self.assertEqual(
+            venue_segment["race_count"],
+            1,
+        )
+        self.assertEqual(
+            venue_segment[
+                "top30_hit_rate"
+            ],
+            1.0,
+        )
 
         with learning_database.get_connection() as connection:
             frozen = connection.execute(
@@ -979,6 +1025,7 @@ class IndependentAiTest(unittest.TestCase):
             ],
             2,
         )
+
         detail = (
             learning_database
             .get_independent_prediction_detail(
@@ -1063,6 +1110,40 @@ class IndependentAiTest(unittest.TestCase):
             .get_independent_prediction_detail(
                 "missing-run"
             )
+        )
+
+    def test_model_promotion_guardrails(
+        self,
+    ) -> None:
+        incumbent = {
+            "race_log_loss": 4.0,
+            "mean_winner_rank": 18.0,
+            "top10_hit_rate": 0.30,
+        }
+        improved = {
+            "race_log_loss": 3.9,
+            "mean_winner_rank": 18.1,
+            "top10_hit_rate": 0.30,
+        }
+        degraded = {
+            "race_log_loss": 4.2,
+            "mean_winner_rank": 20.0,
+            "top10_hit_rate": 0.25,
+        }
+
+        self.assertTrue(
+            train_independent_model
+            .decide_model_promotion(
+                improved,
+                incumbent,
+            )["promoted"]
+        )
+        self.assertFalse(
+            train_independent_model
+            .decide_model_promotion(
+                degraded,
+                incumbent,
+            )["promoted"]
         )
 
     def test_excludes_training_period_prediction_from_official_score(

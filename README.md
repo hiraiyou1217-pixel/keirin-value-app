@@ -1,6 +1,6 @@
 # keirin-value-app
 
-## Ver.1.14.0
+## Ver.1.15.0
 
 WINTICKETの3連単全オッズを使う期待値計算と、機械学習用SQLiteへの
 過去レース一括収集、オッズ非依存AI予測を行うStreamlitアプリです。
@@ -27,7 +27,13 @@ python -m playwright install chromium
 
 ## 起動
 
-`run.command`をダブルクリックするか、次を実行します。
+`install.command`の完了時に、デスクトップへ「競輪AI.app」を作成します。
+以後はこのアイコンをダブルクリックするだけで、ターミナルを表示せず
+Streamlitを起動してブラウザを開けます。アイコンを作り直す場合は
+`install_desktop_launcher.command`をダブルクリックしてください。
+
+従来どおり`run.command`をダブルクリックするか、次を実行することも
+できます。
 
 ```bash
 cd ~/Documents/GitHub/keirin-value-app
@@ -116,6 +122,14 @@ SQLiteの保存先は `data/keirin_learning.db` です。
 本格利用には1,000レース以上を推奨します。学習済みモデルは
 `models/keirin_odds_independent_model.joblib` に保存され、再学習時は
 `models/backups` へ旧モデルをバックアップします。
+
+再学習では、日付順の未学習予測からPlatt法による確率校正を作成し、
+校正後の3連単確率をMac版とスマホ版の両方で使用します。新モデルは
+LogLoss、的中組番の平均順位、Top10的中率を現行モデルと自動比較し、
+悪化上限を守りながら少なくとも1指標が改善した場合だけ正式昇格します。
+不採用モデルは `models/candidates` に残り、現行モデルを上書きしません。
+時系列検証と正式自己評価は、競輪場、出走数、グレード、発走帯、
+並び信頼度などの条件別にも確認できます。
 
 現在レースはメイン画面の「レースデータを取得」から読み込みます。
 深夜などオッズが非表示でも、出走表・選手コメント・並びを取得して

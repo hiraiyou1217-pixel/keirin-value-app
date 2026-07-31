@@ -15,6 +15,9 @@ from train_independent_model import (
     INDEPENDENT_MODEL_PATH,
 )
 from learning_database import DATABASE_PATH
+from portable_independent_model import (
+    apply_probability_calibration,
+)
 
 
 def load_independent_model_package(
@@ -270,9 +273,18 @@ def predict_independent_race(
             X,
         )
     )
+    calibrated_probabilities = np.asarray(
+        apply_probability_calibration(
+            raw_probabilities,
+            package.get(
+                "probability_calibration"
+            ),
+        ),
+        dtype=float,
+    )
     probabilities = (
         _normalize_probabilities(
-            raw_probabilities
+            calibrated_probabilities
         )
     )
     combination_output = dataframe[
@@ -404,6 +416,12 @@ def predict_independent_race(
             combination_output
         ),
         "odds_independent": True,
+        "probability_calibration": (
+            package.get(
+                "probability_calibration",
+                {"method": "identity"},
+            )
+        ),
         "race_id": race_id,
         "feature_coverage": (
             feature_coverage
