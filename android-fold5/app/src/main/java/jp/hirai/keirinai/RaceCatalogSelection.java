@@ -16,15 +16,18 @@ public final class RaceCatalogSelection {
         private final String venue;
         private final int raceNumber;
         private final String url;
+        private final String startTime;
 
         private RaceEntry(
             String venue,
             int raceNumber,
-            String url
+            String url,
+            String startTime
         ) {
             this.venue = venue;
             this.raceNumber = raceNumber;
             this.url = url;
+            this.startTime = startTime;
         }
 
         public String venue() {
@@ -37,6 +40,10 @@ public final class RaceCatalogSelection {
 
         public String url() {
             return url;
+        }
+
+        public String startTime() {
+            return startTime;
         }
     }
 
@@ -97,6 +104,10 @@ public final class RaceCatalogSelection {
                 "url",
                 ""
             ).trim();
+            String startTime = source.optString(
+                "startTime",
+                ""
+            ).trim();
 
             if (venue.isBlank()) {
                 throw new JSONException(
@@ -123,6 +134,18 @@ public final class RaceCatalogSelection {
                 );
             }
 
+            if (
+                !startTime.isBlank()
+                && !startTime.matches(
+                    "(?:[01]\\d|2[0-3]):[0-5]\\d"
+                )
+            ) {
+                throw new JSONException(
+                    "発走時刻の形式が不正です: "
+                        + startTime
+                );
+            }
+
             String key =
                 venue + "\u0000" + raceNumber;
 
@@ -142,7 +165,8 @@ public final class RaceCatalogSelection {
                 new RaceEntry(
                     venue,
                     raceNumber,
-                    url
+                    url,
+                    startTime
                 )
             );
             count++;

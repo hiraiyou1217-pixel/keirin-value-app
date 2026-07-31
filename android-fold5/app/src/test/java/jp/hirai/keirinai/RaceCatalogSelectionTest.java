@@ -14,11 +14,13 @@ public class RaceCatalogSelectionTest {
         String venue,
         int raceNumber,
         String slug,
-        String cupId
+        String cupId,
+        String startTime
     ) throws JSONException {
         return new JSONObject()
             .put("venue", venue)
             .put("raceNumber", raceNumber)
+            .put("startTime", startTime)
             .put(
                 "url",
                 "https://www.winticket.jp/"
@@ -40,7 +42,8 @@ public class RaceCatalogSelectionTest {
                     "青森競輪",
                     3,
                     "aomori",
-                    "2026073112"
+                    "2026073112",
+                    "12:35"
                 )
             )
             .put(
@@ -48,7 +51,8 @@ public class RaceCatalogSelectionTest {
                     "伊東競輪",
                     2,
                     "ito",
-                    "2026073137"
+                    "2026073137",
+                    "11:04"
                 )
             )
             .put(
@@ -56,7 +60,8 @@ public class RaceCatalogSelectionTest {
                     "青森競輪",
                     1,
                     "aomori",
-                    "2026073112"
+                    "2026073112",
+                    "11:15"
                 )
             );
 
@@ -88,6 +93,12 @@ public class RaceCatalogSelectionTest {
                 "青森競輪"
             ).get(0).url()
         );
+        assertEquals(
+            "11:15",
+            catalog.racesForVenue(
+                "青森競輪"
+            ).get(0).startTime()
+        );
     }
 
     @Test
@@ -99,7 +110,8 @@ public class RaceCatalogSelectionTest {
                     "青森競輪",
                     1,
                     "aomori",
-                    "2026073112"
+                    "2026073112",
+                    "11:15"
                 )
             )
             .put(
@@ -107,7 +119,8 @@ public class RaceCatalogSelectionTest {
                     "青森競輪",
                     1,
                     "aomori",
-                    "2026073112"
+                    "2026073112",
+                    "11:15"
                 )
             );
 
@@ -136,6 +149,28 @@ public class RaceCatalogSelectionTest {
                             + "keirin/racecard/"
                             + "20260731"
                     )
+            );
+
+        assertThrows(
+            JSONException.class,
+            () -> RaceCatalogSelection.from(
+                source
+            )
+        );
+    }
+
+    @Test
+    public void rejectsInvalidStartTime()
+        throws JSONException {
+        JSONArray source = new JSONArray()
+            .put(
+                race(
+                    "青森競輪",
+                    1,
+                    "aomori",
+                    "2026073112",
+                    "25:61"
+                )
             );
 
         assertThrows(

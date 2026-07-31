@@ -29,6 +29,14 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 python -m playwright install chromium
 
+if ./install_desktop_launcher.command; then
+  echo "デスクトップ起動アイコンも更新しました。"
+else
+  echo "デスクトップ起動アイコンだけ作成できませんでした。"
+  echo "後で install_desktop_launcher.command を実行してください。"
+fi
+
 echo ""
-echo "更新が完了しました。次に run.command を開いてください。"
+echo "更新が完了しました。"
+echo "次回からデスクトップの「競輪AI.app」を開いてください。"
 read -p "Enterキーで終了します"

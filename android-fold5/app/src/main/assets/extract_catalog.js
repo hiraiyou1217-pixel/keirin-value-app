@@ -2,6 +2,19 @@
     const clean = value => String(value || "")
         .replace(/\s+/g, " ")
         .trim();
+    const startTimeFromText = value => {
+        const match = clean(value).match(
+            /(?:^|[^\d])([01]?\d|2[0-3]):([0-5]\d)(?!\d)/
+        );
+
+        if (!match) return "";
+
+        return (
+            String(Number(match[1])).padStart(2, "0")
+            + ":"
+            + match[2]
+        );
+    };
     const pattern = /^\/keirin\/([^/]+)\/racecard\/(\d+)\/(\d+)\/(\d+)\/?$/;
     const venueNames = {
         hakodate: "函館競輪",
@@ -75,12 +88,22 @@
                 url.origin
                 + url.pathname.replace(/\/$/, "")
             );
+            const linkText = clean(
+                [
+                    anchor.innerText,
+                    anchor.getAttribute("aria-label"),
+                    anchor.getAttribute("title")
+                ]
+                    .filter(Boolean)
+                    .join(" ")
+            );
             byUrl.set(canonical, {
                 url: canonical,
                 venue: venueNames[slug],
                 raceNumber,
                 dayNumber: Number(match[3]),
-                linkText: clean(anchor.innerText)
+                startTime: startTimeFromText(linkText),
+                linkText
             });
         }
 

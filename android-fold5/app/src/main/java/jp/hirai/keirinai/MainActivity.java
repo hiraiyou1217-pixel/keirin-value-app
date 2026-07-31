@@ -7,6 +7,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -66,6 +67,14 @@ public class MainActivity extends Activity {
     private static final int PRIMARY = Color.rgb(0, 108, 76);
     private static final int ERROR = Color.rgb(177, 31, 40);
     private static final int MUTED = Color.rgb(88, 96, 105);
+    private static final long CATALOG_CACHE_MAX_AGE_MILLIS =
+        15L * 60L * 1000L;
+    private static final String CATALOG_CACHE_DATE =
+        "race_catalog_cache_date";
+    private static final String CATALOG_CACHE_PAYLOAD =
+        "race_catalog_cache_payload";
+    private static final String CATALOG_CACHE_SAVED_AT =
+        "race_catalog_cache_saved_at";
 
     private final Handler handler = new Handler(
         Looper.getMainLooper()
@@ -75,6 +84,9 @@ public class MainActivity extends Activity {
     private EditText urlInput;
     private Button fetchButton;
     private Button selectRaceButton;
+    private Button previousRaceButton;
+    private Button nextRaceButton;
+    private Button catalogRefreshButton;
     private Button importButton;
     private Button predictButton;
     private Button driveFolderButton;
@@ -98,6 +110,10 @@ public class MainActivity extends Activity {
     private JSONObject latestRacePayload;
     private final Calendar selectedRaceDate =
         Calendar.getInstance(Locale.JAPAN);
+    private RaceCatalogSelection activeCatalog;
+    private String activeVenue = "";
+    private int activeRaceIndex = -1;
+    private String selectedDateText = "";
     private String selectedDateLabel = "";
     private LoadMode loadMode = LoadMode.NONE;
 
@@ -159,7 +175,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView version = text(
-            "Galaxy Z Fold5 端末内AI版 0.4",
+            "Galaxy Z Fold5 端末内AI版 0.5",
             13,
             MUTED
         );
@@ -277,6 +293,96 @@ public class MainActivity extends Activity {
         root.addView(
             raceSelectionView,
             selectionParams
+        );
+
+        LinearLayout raceNavigation =
+            new LinearLayout(this);
+        raceNavigation.setOrientation(
+            LinearLayout.HORIZONTAL
+        );
+        raceNavigation.setGravity(
+            Gravity.CENTER_VERTICAL
+        );
+
+        previousRaceButton = button(
+            "前のレース"
+        );
+        previousRaceButton.setEnabled(false);
+        previousRaceButton.setOnClickListener(
+            ignored -> moveRace(-1)
+        );
+        LinearLayout.LayoutParams previousParams =
+            new LinearLayout.LayoutParams(
+                0,
+                dp(50),
+                1f
+            );
+        previousParams.setMargins(
+            0,
+            dp(8),
+            dp(5),
+            0
+        );
+        raceNavigation.addView(
+            previousRaceButton,
+            previousParams
+        );
+
+        nextRaceButton = button(
+            "次のレース"
+        );
+        nextRaceButton.setTextColor(Color.WHITE);
+        nextRaceButton.setBackgroundColor(PRIMARY);
+        nextRaceButton.setEnabled(false);
+        nextRaceButton.setOnClickListener(
+            ignored -> moveRace(1)
+        );
+        LinearLayout.LayoutParams nextParams =
+            new LinearLayout.LayoutParams(
+                0,
+                dp(50),
+                1f
+            );
+        nextParams.setMargins(
+            dp(5),
+            dp(8),
+            0,
+            0
+        );
+        raceNavigation.addView(
+            nextRaceButton,
+            nextParams
+        );
+        root.addView(
+            raceNavigation,
+            matchWrap()
+        );
+
+        catalogRefreshButton = button(
+            "開催一覧を最新情報に更新"
+        );
+        catalogRefreshButton.setEnabled(false);
+        catalogRefreshButton.setOnClickListener(
+            ignored -> {
+                if (!selectedDateText.isBlank()) {
+                    loadCatalog(
+                        selectedDateText,
+                        true
+                    );
+                }
+            }
+        );
+        LinearLayout.LayoutParams refreshParams =
+            matchWrap();
+        refreshParams.setMargins(
+            0,
+            dp(8),
+            0,
+            0
+        );
+        root.addView(
+            catalogRefreshButton,
+            refreshParams
         );
 
         TextView inputLabel = label(
@@ -867,6 +973,7 @@ public class MainActivity extends Activity {
                         month,
                         day
                     );
+                    selectedDateText = dateText;
                     selectedDateLabel =
                         String.format(
                             Locale.ROOT,
@@ -882,7 +989,14 @@ public class MainActivity extends Activity {
                     raceSelectionView.setTextColor(
                         PRIMARY
                     );
-                    loadCatalog(dateText);
+                    activeCatalog = null;
+                    activeVenue = "";
+                    activeRaceIndex = -1;
+                    updateRaceNavigationButtons();
+                    loadCatalog(
+                        dateText,
+                        false
+                    );
                 },
                 selectedRaceDate.get(
                     Calendar.YEAR
@@ -897,7 +1011,10 @@ public class MainActivity extends Activity {
         dialog.show();
     }
 
-    private void loadCatalog(String dateText) {
+    private void loadCatalog(
+        String dateText,
+        boolean forceRefresh
+    ) {
         if (catalogScript.isBlank()) {
             setStatus(
                 "開催一覧の抽出プログラムを"
@@ -919,8 +1036,84 @@ public class MainActivity extends Activity {
                 + "読み込んでいます…",
             MUTED
         );
+
+        if (
+            !forceRefresh
+            && loadCachedCatalog(dateText)
+        ) {
+            return;
+        }
+
         webView.stopLoading();
         webView.loadUrl(requestedUrl);
+    }
+
+    private boolean loadCachedCatalog(
+        String dateText
+    ) {
+        SharedPreferences preferences =
+            getPreferences(MODE_PRIVATE);
+        String cachedDate = preferences.getString(
+            CATALOG_CACHE_DATE,
+            ""
+        );
+        String payload = preferences.getString(
+            CATALOG_CACHE_PAYLOAD,
+            ""
+        );
+        long savedAt = preferences.getLong(
+            CATALOG_CACHE_SAVED_AT,
+            0L
+        );
+        long age = System.currentTimeMillis()
+            - savedAt;
+
+        if (
+            !dateText.equals(cachedDate)
+            || payload.isBlank()
+            || savedAt <= 0L
+            || age < 0L
+            || age
+                > CATALOG_CACHE_MAX_AGE_MILLIS
+        ) {
+            return false;
+        }
+
+        try {
+            processCatalogRoot(
+                new JSONObject(payload),
+                true
+            );
+            return true;
+        } catch (JSONException exception) {
+            preferences.edit()
+                .remove(CATALOG_CACHE_DATE)
+                .remove(CATALOG_CACHE_PAYLOAD)
+                .remove(CATALOG_CACHE_SAVED_AT)
+                .apply();
+            return false;
+        }
+    }
+
+    private void saveCatalogCache(
+        String dateText,
+        JSONObject root
+    ) {
+        getPreferences(MODE_PRIVATE)
+            .edit()
+            .putString(
+                CATALOG_CACHE_DATE,
+                dateText
+            )
+            .putString(
+                CATALOG_CACHE_PAYLOAD,
+                root.toString()
+            )
+            .putLong(
+                CATALOG_CACHE_SAVED_AT,
+                System.currentTimeMillis()
+            )
+            .apply();
     }
 
     private void evaluateCatalog() {
@@ -937,51 +1130,73 @@ public class MainActivity extends Activity {
             JSONObject root = decodeJavascriptObject(
                 rawValue
             );
-
-            if (!root.optBoolean("ok", false)) {
-                finishWithError(
-                    root.optString(
-                        "error",
-                        "開催レースを"
-                            + "取得できませんでした。"
-                    )
-                );
-                return;
-            }
-
-            JSONArray races = root.optJSONArray(
-                "races"
-            );
-
-            if (
-                races == null
-                || races.length() == 0
-            ) {
-                finishWithError(
-                    "開催レースがありません。"
-                );
-                return;
-            }
-
-            RaceCatalogSelection catalog =
-                RaceCatalogSelection.from(races);
-            loadMode = LoadMode.NONE;
-            finishLoading();
-            showVenueSelection(catalog);
-            setStatus(
-                catalog.venues().size()
-                    + "開催場・"
-                    + catalog.raceCount()
-                    + "レースを検出しました。"
-                    + "開催場を選んでください。",
-                PRIMARY
-            );
+            processCatalogRoot(root, false);
         } catch (JSONException exception) {
             finishWithError(
                 "開催一覧JSONが不正です: "
                     + exception.getMessage()
             );
         }
+    }
+
+    private void processCatalogRoot(
+        JSONObject root,
+        boolean fromCache
+    ) throws JSONException {
+        if (!root.optBoolean("ok", false)) {
+            finishWithError(
+                root.optString(
+                    "error",
+                    "開催レースを"
+                        + "取得できませんでした。"
+                )
+            );
+            return;
+        }
+
+        JSONArray races = root.optJSONArray(
+            "races"
+        );
+
+        if (
+            races == null
+            || races.length() == 0
+        ) {
+            finishWithError(
+                "開催レースがありません。"
+            );
+            return;
+        }
+
+        RaceCatalogSelection catalog =
+            RaceCatalogSelection.from(races);
+
+        if (!fromCache) {
+            saveCatalogCache(
+                selectedDateText,
+                root
+            );
+        }
+
+        activeCatalog = catalog;
+        activeVenue = "";
+        activeRaceIndex = -1;
+        loadMode = LoadMode.NONE;
+        finishLoading();
+        showVenueSelection(catalog);
+        setStatus(
+            catalog.venues().size()
+                + "開催場・"
+                + catalog.raceCount()
+                + "レースを"
+                + (
+                    fromCache
+                        ? "キャッシュから表示しました。"
+                        : "検出しました。"
+                )
+                + "開催場を選んでください。",
+            PRIMARY
+        );
     }
 
     private void showVenueSelection(
@@ -1044,9 +1259,21 @@ public class MainActivity extends Activity {
             index < races.size();
             index++
         ) {
+            RaceCatalogSelection.RaceEntry
+                race = races.get(index);
+            String schedule =
+                RaceTimeLabel.schedule(
+                    selectedDateText,
+                    race.startTime()
+                );
             labels[index] =
-                races.get(index).raceNumber()
-                    + "R";
+                race.raceNumber()
+                    + "R"
+                    + (
+                        schedule.isBlank()
+                            ? ""
+                            : "  " + schedule
+                    );
         }
 
         raceSelectionView.setText(
@@ -1064,33 +1291,8 @@ public class MainActivity extends Activity {
             )
             .setItems(
                 labels,
-                (dialog, index) -> {
-                    RaceCatalogSelection.RaceEntry
-                        race = races.get(index);
-                    raceSelectionView.setText(
-                        selectedDateLabel
-                            + " → "
-                            + venue
-                            + " → "
-                            + race.raceNumber()
-                            + "R"
-                    );
-                    raceSelectionView.setTextColor(
-                        PRIMARY
-                    );
-                    urlInput.setText(
-                        race.url()
-                    );
-                    setStatus(
-                        venue
-                            + " "
-                            + race.raceNumber()
-                            + "Rの出走表を"
-                            + "取得します…",
-                        MUTED
-                    );
-                    startFetch();
-                }
+                (dialog, index) ->
+                    selectRace(venue, index)
             )
             .setNeutralButton(
                 "開催場へ戻る",
@@ -1102,6 +1304,117 @@ public class MainActivity extends Activity {
                 null
             )
             .show();
+    }
+
+    private void selectRace(
+        String venue,
+        int index
+    ) {
+        if (activeCatalog == null) {
+            setStatus(
+                "開催一覧を再取得してください。",
+                ERROR
+            );
+            return;
+        }
+
+        List<RaceCatalogSelection.RaceEntry>
+            races = activeCatalog.racesForVenue(
+                venue
+            );
+
+        if (index < 0 || index >= races.size()) {
+            setStatus(
+                "移動先のレースがありません。",
+                ERROR
+            );
+            return;
+        }
+
+        RaceCatalogSelection.RaceEntry race =
+            races.get(index);
+        activeVenue = venue;
+        activeRaceIndex = index;
+        String schedule = RaceTimeLabel.schedule(
+            selectedDateText,
+            race.startTime()
+        );
+        raceSelectionView.setText(
+            selectedDateLabel
+                + " → "
+                + venue
+                + " → "
+                + race.raceNumber()
+                + "R"
+                + (
+                    schedule.isBlank()
+                        ? ""
+                        : "\n" + schedule
+                )
+        );
+        raceSelectionView.setTextColor(PRIMARY);
+        urlInput.setText(race.url());
+        updateRaceNavigationButtons();
+        setStatus(
+            venue
+                + " "
+                + race.raceNumber()
+                + "Rの出走表を"
+                + "取得します…",
+            MUTED
+        );
+        startFetch();
+    }
+
+    private void moveRace(int offset) {
+        if (
+            activeCatalog == null
+            || activeVenue.isBlank()
+            || activeRaceIndex < 0
+        ) {
+            setStatus(
+                "先に開催場とレースを"
+                    + "選んでください。",
+                ERROR
+            );
+            return;
+        }
+
+        selectRace(
+            activeVenue,
+            activeRaceIndex + offset
+        );
+    }
+
+    private void updateRaceNavigationButtons() {
+        if (
+            previousRaceButton == null
+            || nextRaceButton == null
+        ) {
+            return;
+        }
+
+        List<RaceCatalogSelection.RaceEntry>
+            races = (
+                activeCatalog == null
+                    || activeVenue.isBlank()
+            )
+                ? List.of()
+                : activeCatalog.racesForVenue(
+                    activeVenue
+                );
+        boolean idle = progressBar == null
+            || progressBar.getVisibility()
+                != View.VISIBLE;
+        previousRaceButton.setEnabled(
+            idle && activeRaceIndex > 0
+        );
+        nextRaceButton.setEnabled(
+            idle
+                && activeRaceIndex >= 0
+                && activeRaceIndex + 1
+                    < races.size()
+        );
     }
 
     private void pasteUrl() {
@@ -1983,6 +2296,17 @@ public class MainActivity extends Activity {
         progressBar.setVisibility(
             busy ? View.VISIBLE : View.GONE
         );
+        catalogRefreshButton.setEnabled(
+            !busy
+                && !selectedDateText.isBlank()
+        );
+
+        if (busy) {
+            previousRaceButton.setEnabled(false);
+            nextRaceButton.setEnabled(false);
+        } else {
+            updateRaceNavigationButtons();
+        }
 
         if (busy) {
             predictButton.setEnabled(false);
