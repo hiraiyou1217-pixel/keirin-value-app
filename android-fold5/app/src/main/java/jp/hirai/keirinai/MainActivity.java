@@ -87,6 +87,7 @@ public class MainActivity extends Activity {
     private TextView diagnosticsView;
     private TextView historyView;
     private TextView driveStatusView;
+    private TextView raceSelectionView;
     private LinearLayout riderContainer;
     private LinearLayout predictionContainer;
     private WebView webView;
@@ -95,6 +96,9 @@ public class MainActivity extends Activity {
     private String requestedUrl = "";
     private String latestDiagnostics = "";
     private JSONObject latestRacePayload;
+    private final Calendar selectedRaceDate =
+        Calendar.getInstance(Locale.JAPAN);
+    private String selectedDateLabel = "";
     private LoadMode loadMode = LoadMode.NONE;
 
     private enum LoadMode {
@@ -155,7 +159,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView version = text(
-            "Galaxy Z Fold5 端末内AI版 0.3",
+            "Galaxy Z Fold5 端末内AI版 0.4",
             13,
             MUTED
         );
@@ -228,7 +232,7 @@ public class MainActivity extends Activity {
         );
 
         selectRaceButton = button(
-            "日付からレースを選ぶ"
+            "日付 → 開催場 → レースNo.を選ぶ"
         );
         selectRaceButton.setTextColor(Color.WHITE);
         selectRaceButton.setBackgroundColor(PRIMARY);
@@ -246,6 +250,33 @@ public class MainActivity extends Activity {
         root.addView(
             selectRaceButton,
             selectParams
+        );
+
+        raceSelectionView = text(
+            "未選択：日付 → 開催場 → レースNo.",
+            14,
+            MUTED
+        );
+        raceSelectionView.setPadding(
+            dp(12),
+            dp(12),
+            dp(12),
+            dp(12)
+        );
+        raceSelectionView.setBackgroundColor(
+            Color.WHITE
+        );
+        LinearLayout.LayoutParams selectionParams =
+            matchWrap();
+        selectionParams.setMargins(
+            0,
+            dp(8),
+            0,
+            0
+        );
+        root.addView(
+            raceSelectionView,
+            selectionParams
         );
 
         TextView inputLabel = label(
@@ -820,9 +851,6 @@ public class MainActivity extends Activity {
     }
 
     private void chooseRaceDate() {
-        Calendar now = Calendar.getInstance(
-            Locale.JAPAN
-        );
         DatePickerDialog dialog =
             new DatePickerDialog(
                 this,
@@ -834,11 +862,37 @@ public class MainActivity extends Activity {
                         month + 1,
                         day
                     );
+                    selectedRaceDate.set(
+                        year,
+                        month,
+                        day
+                    );
+                    selectedDateLabel =
+                        String.format(
+                            Locale.ROOT,
+                            "%04d/%02d/%02d",
+                            year,
+                            month + 1,
+                            day
+                        );
+                    raceSelectionView.setText(
+                        selectedDateLabel
+                            + " → 開催場を選択"
+                    );
+                    raceSelectionView.setTextColor(
+                        PRIMARY
+                    );
                     loadCatalog(dateText);
                 },
-                now.get(Calendar.YEAR),
-                now.get(Calendar.MONTH),
-                now.get(Calendar.DAY_OF_MONTH)
+                selectedRaceDate.get(
+                    Calendar.YEAR
+                ),
+                selectedRaceDate.get(
+                    Calendar.MONTH
+                ),
+                selectedRaceDate.get(
+                    Calendar.DAY_OF_MONTH
+                )
             );
         dialog.show();
     }
@@ -909,62 +963,17 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            String[] labels =
-                new String[races.length()];
-
-            for (
-                int index = 0;
-                index < races.length();
-                index++
-            ) {
-                JSONObject race =
-                    races.getJSONObject(index);
-                labels[index] = race.optString(
-                    "venue",
-                    ""
-                )
-                    + "  "
-                    + race.optInt(
-                        "raceNumber",
-                        0
-                    )
-                    + "R";
-            }
-
+            RaceCatalogSelection catalog =
+                RaceCatalogSelection.from(races);
             loadMode = LoadMode.NONE;
             finishLoading();
-            new AlertDialog.Builder(this)
-                .setTitle(
-                    races.length()
-                        + "レースから選択"
-                )
-                .setItems(
-                    labels,
-                    (dialog, index) -> {
-                        JSONObject race =
-                            races.optJSONObject(
-                                index
-                            );
-
-                        if (race == null) {
-                            return;
-                        }
-
-                        String url = race.optString(
-                            "url",
-                            ""
-                        );
-                        urlInput.setText(url);
-                        startFetch();
-                    }
-                )
-                .setNegativeButton(
-                    "キャンセル",
-                    null
-                )
-                .show();
+            showVenueSelection(catalog);
             setStatus(
-                "対象レースを選んでください。",
+                catalog.venues().size()
+                    + "開催場・"
+                    + catalog.raceCount()
+                    + "レースを検出しました。"
+                    + "開催場を選んでください。",
                 PRIMARY
             );
         } catch (JSONException exception) {
@@ -973,6 +982,126 @@ public class MainActivity extends Activity {
                     + exception.getMessage()
             );
         }
+    }
+
+    private void showVenueSelection(
+        RaceCatalogSelection catalog
+    ) {
+        List<String> venues =
+            catalog.venues();
+        String[] labels = venues.toArray(
+            new String[0]
+        );
+        raceSelectionView.setText(
+            selectedDateLabel
+                + " → 開催場を選択"
+        );
+        raceSelectionView.setTextColor(PRIMARY);
+
+        new AlertDialog.Builder(this)
+            .setTitle(
+                "開催場を選択（"
+                    + venues.size()
+                    + "場）"
+            )
+            .setItems(
+                labels,
+                (dialog, index) -> {
+                    String venue =
+                        venues.get(index);
+                    showRaceNumberSelection(
+                        catalog,
+                        venue
+                    );
+                }
+            )
+            .setNeutralButton(
+                "日付を変更",
+                (dialog, which) ->
+                    chooseRaceDate()
+            )
+            .setNegativeButton(
+                "キャンセル",
+                null
+            )
+            .show();
+    }
+
+    private void showRaceNumberSelection(
+        RaceCatalogSelection catalog,
+        String venue
+    ) {
+        List<
+            RaceCatalogSelection.RaceEntry
+        > races = catalog.racesForVenue(
+            venue
+        );
+        String[] labels =
+            new String[races.size()];
+
+        for (
+            int index = 0;
+            index < races.size();
+            index++
+        ) {
+            labels[index] =
+                races.get(index).raceNumber()
+                    + "R";
+        }
+
+        raceSelectionView.setText(
+            selectedDateLabel
+                + " → "
+                + venue
+                + " → レースNo.を選択"
+        );
+        raceSelectionView.setTextColor(PRIMARY);
+
+        new AlertDialog.Builder(this)
+            .setTitle(
+                venue
+                    + "：レースNo.を選択"
+            )
+            .setItems(
+                labels,
+                (dialog, index) -> {
+                    RaceCatalogSelection.RaceEntry
+                        race = races.get(index);
+                    raceSelectionView.setText(
+                        selectedDateLabel
+                            + " → "
+                            + venue
+                            + " → "
+                            + race.raceNumber()
+                            + "R"
+                    );
+                    raceSelectionView.setTextColor(
+                        PRIMARY
+                    );
+                    urlInput.setText(
+                        race.url()
+                    );
+                    setStatus(
+                        venue
+                            + " "
+                            + race.raceNumber()
+                            + "Rの出走表を"
+                            + "取得します…",
+                        MUTED
+                    );
+                    startFetch();
+                }
+            )
+            .setNeutralButton(
+                "開催場へ戻る",
+                (dialog, which) ->
+                    showVenueSelection(catalog)
+            )
+            .setNegativeButton(
+                "キャンセル",
+                null
+            )
+            .show();
     }
 
     private void pasteUrl() {
