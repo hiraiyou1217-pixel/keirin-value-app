@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 from datetime import date
 from html import escape
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+from android_prediction_import import (
+    discover_google_drive_directories,
+    import_android_predictions,
+)
 from current_race_snapshot import (
     load_current_race_snapshot,
     resolve_prediction_context,
@@ -1056,6 +1061,119 @@ if (
 
 st.divider()
 st.subheader("3. AI予測の客観評価")
+
+with st.expander(
+    "Galaxyの予測をGoogle Driveから取り込む",
+    expanded=False,
+):
+    drive_directories = (
+        discover_google_drive_directories()
+    )
+    default_drive_directory = (
+        str(drive_directories[0])
+        if len(drive_directories) == 1
+        else ""
+    )
+    mobile_prediction_directory = (
+        st.text_input(
+            "Google DriveのKeirinAIフォルダ",
+            value=default_drive_directory,
+            placeholder=(
+                "/Users/.../GoogleDrive-.../"
+                "My Drive/KeirinAI"
+            ),
+            key=(
+                "android_prediction_directory"
+            ),
+        )
+    )
+
+    if len(drive_directories) > 1:
+        st.info(
+            "候補が複数あります。取り込む"
+            "KeirinAIフォルダを指定してください。\n\n"
+            + "\n".join(
+                f"- `{path}`"
+                for path in drive_directories
+            )
+        )
+    elif not drive_directories:
+        st.caption(
+            "Google Drive for desktopが"
+            "見つからない場合は、Finderで"
+            "KeirinAIフォルダを確認して"
+            "パスを貼り付けてください。"
+        )
+
+    if st.button(
+        "スマホ予測をSQLiteへ取り込む",
+        key="import_android_predictions",
+    ):
+        if not mobile_prediction_directory:
+            st.error(
+                "KeirinAIフォルダを"
+                "指定してください。"
+            )
+        else:
+            try:
+                mobile_import_result = (
+                    import_android_predictions(
+                        Path(
+                            mobile_prediction_directory
+                        )
+                    )
+                )
+                st.session_state[
+                    "android_prediction_import_result"
+                ] = mobile_import_result
+                st.success(
+                    "スマホ予測を取り込みました。"
+                    f" 新規 "
+                    f"{mobile_import_result['imported_count']}件、"
+                    f"重複 "
+                    f"{mobile_import_result['duplicate_count']}件、"
+                    f"失敗 "
+                    f"{mobile_import_result['failed_count']}件。"
+                )
+            except Exception as exception:
+                st.error(
+                    "スマホ予測取込エラー: "
+                    f"{type(exception).__name__}: "
+                    f"{exception}"
+                )
+
+    mobile_import_result = (
+        st.session_state.get(
+            "android_prediction_import_result"
+        )
+    )
+
+    if mobile_import_result:
+        if mobile_import_result["records"]:
+            st.dataframe(
+                pd.DataFrame(
+                    mobile_import_result[
+                        "records"
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        if mobile_import_result["failures"]:
+            st.warning(
+                "形式不正などで取り込めない"
+                "ファイルがあります。"
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    mobile_import_result[
+                        "failures"
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 st.caption(
     "予測時点の全組番順位をSQLiteへ固定保存し、"

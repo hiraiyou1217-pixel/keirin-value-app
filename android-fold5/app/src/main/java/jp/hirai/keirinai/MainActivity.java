@@ -52,6 +52,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int IMPORT_BUNDLE_REQUEST = 1201;
+    private static final int DRIVE_FOLDER_REQUEST = 1202;
     private static final String DESKTOP_USER_AGENT =
         "Mozilla/5.0 (X11; Linux x86_64) "
             + "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -76,6 +77,8 @@ public class MainActivity extends Activity {
     private Button selectRaceButton;
     private Button importButton;
     private Button predictButton;
+    private Button driveFolderButton;
+    private Button driveSyncButton;
     private ProgressBar progressBar;
     private TextView statusView;
     private TextView bundleStatusView;
@@ -83,6 +86,7 @@ public class MainActivity extends Activity {
     private TextView lineupView;
     private TextView diagnosticsView;
     private TextView historyView;
+    private TextView driveStatusView;
     private LinearLayout riderContainer;
     private LinearLayout predictionContainer;
     private WebView webView;
@@ -111,7 +115,14 @@ public class MainActivity extends Activity {
         setContentView(buildScreen());
         configureWebView();
         updateBundleStatus();
+        try {
+            PredictionHistory.cleanup(this);
+        } catch (IOException ignored) {
+            // 履歴表示側でエラー内容を通知します。
+        }
         updateHistory();
+        updateDriveStatus();
+        startDriveSync(false);
 
         String savedUrl = getPreferences(MODE_PRIVATE)
             .getString("racecard_url", "");
@@ -144,7 +155,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView version = text(
-            "Galaxy Z Fold5 端末内AI版 0.2",
+            "Galaxy Z Fold5 端末内AI版 0.3",
             13,
             MUTED
         );
@@ -418,6 +429,79 @@ public class MainActivity extends Activity {
             matchWrap()
         );
 
+        TextView driveLabel = label(
+            "Google Drive同期"
+        );
+        LinearLayout.LayoutParams driveLabelParams =
+            matchWrap();
+        driveLabelParams.setMargins(
+            0,
+            dp(22),
+            0,
+            dp(6)
+        );
+        root.addView(
+            driveLabel,
+            driveLabelParams
+        );
+
+        driveStatusView = text(
+            "Google Drive保存先は未設定です。",
+            13,
+            MUTED
+        );
+        driveStatusView.setPadding(
+            dp(12),
+            dp(12),
+            dp(12),
+            dp(12)
+        );
+        driveStatusView.setBackgroundColor(
+            Color.WHITE
+        );
+        root.addView(
+            driveStatusView,
+            matchWrap()
+        );
+
+        driveFolderButton = button(
+            "Google Drive保存先を選ぶ・変更"
+        );
+        driveFolderButton.setOnClickListener(
+            ignored -> chooseDriveFolder()
+        );
+        LinearLayout.LayoutParams driveFolderParams =
+            matchWrap();
+        driveFolderParams.setMargins(
+            0,
+            dp(8),
+            0,
+            0
+        );
+        root.addView(
+            driveFolderButton,
+            driveFolderParams
+        );
+
+        driveSyncButton = button(
+            "未送信の予測を今すぐ同期"
+        );
+        driveSyncButton.setOnClickListener(
+            ignored -> startDriveSync(true)
+        );
+        LinearLayout.LayoutParams driveSyncParams =
+            matchWrap();
+        driveSyncParams.setMargins(
+            0,
+            dp(8),
+            0,
+            0
+        );
+        root.addView(
+            driveSyncButton,
+            driveSyncParams
+        );
+
         TextView diagnosticsLabel = label(
             "検証ログ"
         );
@@ -596,6 +680,22 @@ public class MainActivity extends Activity {
         );
     }
 
+    private void chooseDriveFolder() {
+        Intent intent = new Intent(
+            Intent.ACTION_OPEN_DOCUMENT_TREE
+        );
+        intent.addFlags(
+            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+        );
+        startActivityForResult(
+            intent,
+            DRIVE_FOLDER_REQUEST
+        );
+    }
+
     @Override
     protected void onActivityResult(
         int requestCode,
@@ -607,6 +707,37 @@ public class MainActivity extends Activity {
             resultCode,
             data
         );
+
+        if (
+            requestCode == DRIVE_FOLDER_REQUEST
+        ) {
+            if (
+                resultCode == RESULT_OK
+                && data != null
+                && data.getData() != null
+            ) {
+                try {
+                    DrivePredictionSync.saveFolder(
+                        this,
+                        data.getData(),
+                        data.getFlags()
+                    );
+                    updateDriveStatus();
+                    startDriveSync(true);
+                } catch (
+                    SecurityException exception
+                ) {
+                    setStatus(
+                        "Drive保存先の許可を"
+                            + "保存できません: "
+                            + exception.getMessage(),
+                        ERROR
+                    );
+                }
+            }
+
+            return;
+        }
 
         if (
             requestCode != IMPORT_BUNDLE_REQUEST
@@ -1230,6 +1361,32 @@ public class MainActivity extends Activity {
                     this,
                     prediction
                 );
+                String driveSummary;
+                boolean driveFailed = false;
+
+                try {
+                    DrivePredictionSync.SyncResult
+                        driveResult =
+                        DrivePredictionSync
+                            .syncPending(this);
+                    driveSummary =
+                        driveResult.summary();
+                    driveFailed =
+                        driveResult.failed > 0;
+                } catch (Exception exception) {
+                    driveFailed = true;
+                    driveSummary =
+                        "Drive同期エラー: "
+                            + exception
+                                .getMessage()
+                            + " 未送信データは"
+                            + "端末に保持しました。";
+                }
+
+                final String finalDriveSummary =
+                    driveSummary;
+                final boolean finalDriveFailed =
+                    driveFailed;
                 handler.post(() -> {
                     try {
                         renderPrediction(
@@ -1238,10 +1395,14 @@ public class MainActivity extends Activity {
                         setStatus(
                             "オッズ非依存AIの"
                                 + "端末内予測が"
-                                + "完了しました。",
-                            PRIMARY
+                                + "完了しました。\n"
+                                + finalDriveSummary,
+                            finalDriveFailed
+                                ? ERROR
+                                : PRIMARY
                         );
                         updateHistory();
+                        updateDriveStatus();
                     } catch (
                         JSONException exception
                     ) {
@@ -1574,6 +1735,102 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void updateDriveStatus() {
+        if (driveStatusView == null) {
+            return;
+        }
+
+        driveStatusView.setText(
+            DrivePredictionSync.status(this)
+        );
+        driveStatusView.setTextColor(
+            DrivePredictionSync
+                .isConfigured(this)
+                ? PRIMARY
+                : MUTED
+        );
+
+        if (driveSyncButton != null) {
+            driveSyncButton.setEnabled(
+                DrivePredictionSync
+                    .isConfigured(this)
+                    && progressBar != null
+                    && progressBar.getVisibility()
+                        != View.VISIBLE
+            );
+        }
+    }
+
+    private void startDriveSync(
+        boolean showProgress
+    ) {
+        if (
+            !DrivePredictionSync.isConfigured(
+                this
+            )
+        ) {
+            updateDriveStatus();
+
+            if (showProgress) {
+                setStatus(
+                    "先にGoogle Drive保存先を"
+                        + "選択してください。",
+                    ERROR
+                );
+            }
+
+            return;
+        }
+
+        if (showProgress) {
+            setBusy(true);
+            setStatus(
+                "未送信の予測を"
+                    + "Google Driveへ"
+                    + "同期しています…",
+                MUTED
+            );
+        }
+
+        worker.execute(() -> {
+            try {
+                DrivePredictionSync.SyncResult
+                    result =
+                    DrivePredictionSync
+                        .syncPending(this);
+                handler.post(() -> {
+                    updateHistory();
+                    updateDriveStatus();
+
+                    if (showProgress) {
+                        setStatus(
+                            result.summary(),
+                            result.failed > 0
+                                ? ERROR
+                                : PRIMARY
+                        );
+                        finishLoading();
+                    }
+                });
+            } catch (Exception exception) {
+                handler.post(() -> {
+                    updateHistory();
+                    updateDriveStatus();
+
+                    if (showProgress) {
+                        setStatus(
+                            "Drive同期エラー: "
+                                + exception
+                                    .getMessage(),
+                            ERROR
+                        );
+                        finishLoading();
+                    }
+                });
+            }
+        });
+    }
+
     private void finishWithError(String message) {
         loadMode = LoadMode.NONE;
         setStatus(message, ERROR);
@@ -1588,6 +1845,12 @@ public class MainActivity extends Activity {
         fetchButton.setEnabled(!busy);
         selectRaceButton.setEnabled(!busy);
         importButton.setEnabled(!busy);
+        driveFolderButton.setEnabled(!busy);
+        driveSyncButton.setEnabled(
+            !busy
+                && DrivePredictionSync
+                    .isConfigured(this)
+        );
         progressBar.setVisibility(
             busy ? View.VISIBLE : View.GONE
         );

@@ -3,6 +3,31 @@ plugins {
     id("com.chaquo.python")
 }
 
+val signingStorePath =
+    providers.environmentVariable(
+        "ANDROID_SIGNING_KEYSTORE_PATH"
+    ).orNull
+val signingStorePassword =
+    providers.environmentVariable(
+        "ANDROID_SIGNING_STORE_PASSWORD"
+    ).orNull
+val signingKeyAlias =
+    providers.environmentVariable(
+        "ANDROID_SIGNING_KEY_ALIAS"
+    ).orNull
+val signingKeyPassword =
+    providers.environmentVariable(
+        "ANDROID_SIGNING_KEY_PASSWORD"
+    ).orNull
+val stableSigningReady = listOf(
+    signingStorePath,
+    signingStorePassword,
+    signingKeyAlias,
+    signingKeyPassword,
+).all {
+    !it.isNullOrBlank()
+}
+
 android {
     namespace = "jp.hirai.keirinai"
     compileSdk = 35
@@ -11,8 +36,8 @@ android {
         applicationId = "jp.hirai.keirinai"
         minSdk = 34
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
 
         testInstrumentationRunner =
             "android.app.InstrumentationTestRunner"
@@ -22,9 +47,28 @@ android {
         }
     }
 
+    signingConfigs {
+        if (stableSigningReady) {
+            create("stableRelease") {
+                storeFile = file(
+                    signingStorePath!!
+                )
+                storePassword =
+                    signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword =
+                    signingKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs
+                .findByName(
+                    "stableRelease"
+                )
         }
     }
 
@@ -60,5 +104,22 @@ chaquopy {
 }
 
 dependencies {
+    implementation(
+        "androidx.documentfile:documentfile:1.0.1"
+    )
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+}
+
+tasks.register("verifyStableSigning") {
+    doLast {
+        check(stableSigningReady) {
+            "固定署名の環境変数が不足しています。"
+        }
+        check(
+            file(signingStorePath!!).isFile
+        ) {
+            "固定署名キーストアがありません。"
+        }
+    }
 }

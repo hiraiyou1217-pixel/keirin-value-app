@@ -2108,6 +2108,9 @@ def save_independent_prediction(
         Any,
     ] | None = None,
     predicted_at: str | None = None,
+    result_known_at_prediction: (
+        bool | None
+    ) = None,
 ) -> dict[str, Any]:
     initialize_database()
 
@@ -2264,12 +2267,22 @@ def save_independent_prediction(
             """,
             (race_key,),
         ).fetchone()
-        result_known = (
+        database_result_known = (
             race is not None
             and str(
                 race["result_status"]
             )
             in ("確定", "要確認")
+        )
+        result_known = (
+            bool(
+                result_known_at_prediction
+            )
+            if (
+                result_known_at_prediction
+                is not None
+            )
+            else database_result_known
         )
         scheduled_start_time = (
             str(

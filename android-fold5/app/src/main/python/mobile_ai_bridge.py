@@ -655,6 +655,20 @@ def predict_race(
             "metadata",
             {},
         ),
+        "input_snapshot": {
+            "riders": riders,
+            "lineup_groups": lineup_groups,
+            "race_conditions": race_conditions,
+            "race_url": payload.get(
+                "pageUrl",
+                "",
+            ),
+            "race_title": payload.get(
+                "pageTitle",
+                "",
+            ),
+            "source": "android_winticket",
+        },
         "feature_coverage": {
             "rider_count": int(
                 len(rider_feature_rows)

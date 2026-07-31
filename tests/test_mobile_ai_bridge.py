@@ -261,6 +261,22 @@ class MobileAiBridgeTest(unittest.TestCase):
             len(result["riders"]),
             7,
         )
+        self.assertEqual(
+            len(
+                result[
+                    "input_snapshot"
+                ]["riders"]
+            ),
+            7,
+        )
+        self.assertEqual(
+            result[
+                "input_snapshot"
+            ]["race_conditions"][
+                "発走時刻"
+            ],
+            "10:00",
+        )
 
 
 if __name__ == "__main__":

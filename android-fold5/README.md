@@ -13,6 +13,9 @@ Macで学習したオッズ非依存AIを端末内で実行するアプリです
 - オッズを使わず3連単全組番と選手別1〜3着確率を端末内計算
 - 3連単AI確率の上位30、選手別着順確率、特徴量充足を表示
 - 全組番の予測確率を端末内履歴へ自動保存
+- 予測JSONを本人のGoogle Driveフォルダへ自動同期
+- Drive送信済み履歴は端末に3日間だけ保持
+- 未送信履歴は3日を過ぎても削除せず次回再送
 - 不足車番や未対応競輪場を推測補完せずエラーにする
 
 ## AIデータZIPをMacで作る
@@ -44,14 +47,39 @@ exports/keirin_android_ai_bundle.zip
 ZIPは学習データを含むため公開リポジトリへPushしないでください。
 Google Driveへ置く場合も本人だけが見られる設定にします。
 
+## 初回だけ固定署名を設定する
+
+GitHub Actionsの実行環境が変わってもAPKを上書き更新できるよう、
+本人専用の固定署名鍵を使用します。これは初回だけ行います。
+
+```bash
+cd ~/Documents/GitHub/keirin-value-app
+python3 setup_android_signing.py
+open .android-signing
+```
+
+`.android-signing/github-actions-secrets.txt` に表示された次の4項目を、
+GitHubのリポジトリで `Settings` → `Secrets and variables` →
+`Actions` → `New repository secret` から登録します。
+
+- `ANDROID_SIGNING_KEYSTORE_BASE64`
+- `ANDROID_SIGNING_STORE_PASSWORD`
+- `ANDROID_SIGNING_KEY_ALIAS`
+- `ANDROID_SIGNING_KEY_PASSWORD`
+
+`.android-signing/keirin-ai-release.p12` と
+`github-actions-secrets.txt` はGitHubへPushせず、外付け媒体などにも
+安全なバックアップを作ってください。同じ鍵を失うと、既存アプリを
+アンインストールせずに更新できなくなります。
+
 ## GitHub ActionsでAPKを作る
 
 1. 変更をGitHubへPushします。
 2. GitHubのリポジトリで `Actions` を開きます。
 3. `Android Fold5 APK` を開きます。
 4. 緑のチェックになった実行を開きます。
-5. `Artifacts` の `keirin-ai-fold5-debug` をダウンロードします。
-6. ZIPを展開し、`app-debug.apk` をGalaxyへ送ります。
+5. `Artifacts` の `keirin-ai-fold5-release` をダウンロードします。
+6. ZIPを展開し、`app-release.apk` をGalaxyへ送ります。
 
 APKはarm64-v8a専用で、Galaxy Z Fold5 / Android 14を対象にしています。
 Python 3.12、NumPy、PandasをAPK内に持つため、旧取得検証版より
@@ -59,14 +87,16 @@ Python 3.12、NumPy、PandasをAPK内に持つため、旧取得検証版より
 
 ## GalaxyへAPKを更新インストール
 
-1. Galaxyで `app-debug.apk` をタップします。
+1. Galaxyで `app-release.apk` をタップします。
 2. 「更新」または「インストール」を押します。
 3. Androidから確認された場合だけ、ファイルを開いたアプリに
    「不明なアプリをインストール」を一時的に許可します。
 4. インストール後はその許可を元に戻します。
 
-同じアプリID・デバッグ署名のまま更新するため、通常は取得検証版を
-アンインストールする必要はありません。
+初めて固定署名版へ移行するときだけ、現在のデバッグ版と署名が異なるため
+旧アプリのアンインストールが必要です。AIデータZIPをアプリ外へ保管して
+から実行してください。固定署名版の導入後は、同じ署名鍵を使う限り
+アンインストールせず上書き更新できます。
 
 ## GalaxyへAIデータを取り込む
 
@@ -90,6 +120,47 @@ Python 3.12、NumPy、PandasをAPK内に持つため、旧取得検証版より
 
 開催一覧を取得できない場合は、個別出走表URLを貼り付けて
 「出走表を取得」する方法も残しています。
+
+## Google Driveへ予測を同期
+
+Google CloudのAPIキーや開発者用OAuth設定は不要です。Galaxyに
+Google Driveアプリをインストールし、予測を保存する本人のGoogle
+アカウントへログインしてください。
+
+1. Google Driveに本人だけがアクセスできる `KeirinAI` フォルダを作ります。
+2. Androidアプリの「Google Drive保存先を選ぶ・変更」を押します。
+3. システムのフォルダ選択画面で、Google Driveの `KeirinAI` を選びます。
+4. 「このフォルダを使用」→「許可」を押します。
+5. 以後は予測完了時にJSONを自動送信します。
+
+必要な許可は選択した `KeirinAI` フォルダの読み書きだけです。他のDrive
+フォルダ、メール、連絡先への許可は要求しません。通信に失敗した場合は
+アプリ起動時または「未送信の予測を今すぐ同期」で再送します。
+
+送信済み予測は端末に72時間保持した後、自動削除します。未送信の予測は
+72時間を過ぎても削除しません。Drive上のJSONはMacで取り込むまで
+削除しないでください。
+
+## Macへスマホ予測を取り込む
+
+MacへGoogle Drive for desktopをインストールし、Galaxyで使用した
+Googleアカウントへログインします。その後、Streamlitの
+「オッズ非依存AI」→「AI予測の客観評価」→
+「Galaxyの予測をGoogle Driveから取り込む」を開き、
+`KeirinAI` フォルダを指定して取込ボタンを押します。
+
+コマンドから取り込む場合は次のとおりです。
+
+```bash
+cd ~/Documents/GitHub/keirin-value-app
+source .venv/bin/activate
+python android_prediction_import.py
+```
+
+開催日・競輪場・R番号・出走車番・3連単全組番・全順位・確率合計を
+検証し、完全な予測だけをSQLiteへ保存します。再実行時は同じレース・
+同じモデルの予測を重複登録しません。結果が既に登録済みなら直ちに照合し、
+未登録なら結果収集後に既存の自己評価へ反映します。
 
 ## AIデータ更新
 
