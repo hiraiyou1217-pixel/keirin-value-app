@@ -143,19 +143,33 @@ Google Driveアプリをインストールし、予測を保存する本人のGo
 
 ## Macへスマホ予測を取り込む
 
-MacへGoogle Drive for desktopをインストールし、Galaxyで使用した
-Googleアカウントへログインします。その後、Streamlitの
-「オッズ非依存AI」→「AI予測の客観評価」→
-「Galaxyの予測をGoogle Driveから取り込む」を開き、
-`KeirinAI` フォルダを指定して取込ボタンを押します。
+Google Drive for desktopは不要です。Streamlitの「オッズ非依存AI」→
+「AI予測の客観評価」→「Galaxyの予測をGoogle Driveから取り込む」→
+「Driveへ直接接続（推奨）」を開きます。
 
-コマンドから取り込む場合は次のとおりです。
+初回だけ次のGoogle側設定が必要です。
 
-```bash
-cd ~/Documents/GitHub/keirin-value-app
-source .venv/bin/activate
-python android_prediction_import.py
-```
+1. Google Cloudで新しいプロジェクトを作ります。
+2. Google Drive APIを有効にします。
+3. Google Auth Platformでアプリ名と連絡先メールを設定します。
+4. 個人のGoogleアカウントでは対象を「外部」にし、テストユーザーへ
+   Galaxyで使用中のGoogleアカウントを追加します。
+5. OAuthクライアントを「デスクトップアプリ」として作成し、
+   JSONをダウンロードします。
+6. 画面でJSONを選び「OAuth設定をMacへ保存」を押します。
+7. 「Googleアカウントへ接続」を押し、Driveの閲覧を許可します。
+
+接続後は「Driveから予測を取り込む」を押します。`KeirinAI`フォルダが
+1個なら空欄で自動検出します。複数ある場合だけ、ブラウザ版Driveで対象
+フォルダを開いたURLを貼り付けます。Drive APIの権限は読み取り専用で、
+アプリは `KeirinAI` 内の `keirin_prediction_*.json` だけを取得します。
+
+OAuthクライアントJSONと認証トークンはMacの
+`data/google_drive/` にだけ保存され、GitHubには追加されません。
+接続を解除すると認証トークンをMacから削除します。
+
+従来どおり手動ダウンロードしたフォルダも「Mac内フォルダ」タブから
+取り込めます。
 
 開催日・競輪場・R番号・出走車番・3連単全組番・全順位・確率合計を
 検証し、完全な予測だけをSQLiteへ保存します。再実行時は同じレース・

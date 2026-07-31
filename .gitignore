@@ -10,6 +10,7 @@ data/*.db-shm
 data/*.db-wal
 data/history_import_jobs/
 data/backups/
+data/google_drive/
 models/*.joblib
 models/*_metadata.json
 

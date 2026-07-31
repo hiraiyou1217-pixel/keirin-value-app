@@ -1,6 +1,6 @@
 # keirin-value-app
 
-## Ver.1.13.0
+## Ver.1.14.0
 
 WINTICKETの3連単全オッズを使う期待値計算と、機械学習用SQLiteへの
 過去レース一括収集、オッズ非依存AI予測を行うStreamlitアプリです。
@@ -52,6 +52,16 @@ python export_android_ai_bundle.py
 端末用モデルの確率を比較し、SQLite整合性、ファイルサイズ、SHA-256を
 記録します。一致しない場合はZIPを作成しません。詳しいAPK更新・取込・
 操作手順は `android-fold5/README.md` を参照してください。
+
+GalaxyからGoogle Driveへ送信した予測JSONは、Google Drive for desktopを
+インストールせず、StreamlitからDrive API経由で直接取り込めます。
+初回だけGoogle CloudでDrive APIを有効化し、「デスクトップアプリ」用の
+OAuthクライアントJSONを作成してください。画面の
+「オッズ非依存AI」→「AI予測の客観評価」→
+「Galaxyの予測をGoogle Driveから取り込む」でJSONを登録して
+Googleアカウントへ接続します。以後は「Driveから予測を取り込む」だけで
+SQLiteへの重複防止登録と結果照合まで行います。OAuthクライアントJSONと
+認証トークンは `data/google_drive/` に保存され、GitHubの対象外です。
 
 ## 過去レース収集
 

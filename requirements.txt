@@ -5,3 +5,5 @@ playwright==1.55.0
 certifi>=2024.8.30
 scikit-learn==1.8.0
 joblib==1.5.3
+google-api-python-client==2.198.0
+google-auth-oauthlib==1.4.0

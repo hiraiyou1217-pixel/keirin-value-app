@@ -16,6 +16,13 @@ from current_race_snapshot import (
     load_current_race_snapshot,
     resolve_prediction_context,
 )
+from google_drive_prediction_import import (
+    connect_google_drive,
+    disconnect_google_drive,
+    google_drive_connection_status,
+    import_google_drive_predictions,
+    save_google_drive_client_config,
+)
 from independent_learning_features import (
     get_independent_training_summary,
 )
@@ -1066,69 +1073,179 @@ with st.expander(
     "Galaxyの予測をGoogle Driveから取り込む",
     expanded=False,
 ):
-    drive_directories = (
-        discover_google_drive_directories()
-    )
-    default_drive_directory = (
-        str(drive_directories[0])
-        if len(drive_directories) == 1
-        else ""
-    )
-    mobile_prediction_directory = (
-        st.text_input(
-            "Google DriveのKeirinAIフォルダ",
-            value=default_drive_directory,
-            placeholder=(
-                "/Users/.../GoogleDrive-.../"
-                "My Drive/KeirinAI"
-            ),
-            key=(
-                "android_prediction_directory"
-            ),
-        )
+    (
+        drive_api_tab,
+        local_folder_tab,
+    ) = st.tabs(
+        [
+            "Driveへ直接接続（推奨）",
+            "Mac内フォルダ",
+        ]
     )
 
-    if len(drive_directories) > 1:
-        st.info(
-            "候補が複数あります。取り込む"
-            "KeirinAIフォルダを指定してください。\n\n"
-            + "\n".join(
-                f"- `{path}`"
-                for path in drive_directories
-            )
-        )
-    elif not drive_directories:
+    with drive_api_tab:
         st.caption(
-            "Google Drive for desktopが"
-            "見つからない場合は、Finderで"
-            "KeirinAIフォルダを確認して"
-            "パスを貼り付けてください。"
+            "Google Driveデスクトップ版は"
+            "不要です。初回だけGoogle Cloudの"
+            "OAuthクライアントJSONと、Driveの"
+            "閲覧許可が必要です。認証情報は"
+            "このMac内だけに保存されます。"
+        )
+        status = (
+            google_drive_connection_status()
+        )
+        oauth_client_file = st.file_uploader(
+            "OAuthクライアントJSON",
+            type=["json"],
+            key=(
+                "google_drive_oauth_client"
+            ),
+            help=(
+                "Google Cloudでアプリの種類を"
+                "「デスクトップアプリ」にして"
+                "ダウンロードしたJSONです。"
+            ),
         )
 
-    if st.button(
-        "スマホ予測をSQLiteへ取り込む",
-        key="import_android_predictions",
-    ):
-        if not mobile_prediction_directory:
-            st.error(
-                "KeirinAIフォルダを"
-                "指定してください。"
+        if st.button(
+            "OAuth設定をMacへ保存",
+            key=(
+                "save_google_drive_oauth"
+            ),
+            disabled=(
+                oauth_client_file is None
+            ),
+        ):
+            try:
+                save_google_drive_client_config(
+                    oauth_client_file.getvalue()
+                )
+                status = (
+                    google_drive_connection_status()
+                )
+                st.success(
+                    "OAuth設定を保存しました。"
+                    "次にGoogleアカウントへ"
+                    "接続してください。"
+                )
+            except Exception as exception:
+                st.error(
+                    "OAuth設定エラー: "
+                    f"{type(exception).__name__}: "
+                    f"{exception}"
+                )
+
+        if status["client_configured"]:
+            st.success(
+                "OAuth設定：登録済み"
             )
         else:
+            st.info(
+                "OAuth設定：未登録"
+            )
+
+        (
+            connect_column,
+            disconnect_column,
+        ) = st.columns(2)
+
+        with connect_column:
+            if st.button(
+                "Googleアカウントへ接続",
+                key=(
+                    "connect_google_drive"
+                ),
+                disabled=not status[
+                    "client_configured"
+                ],
+                use_container_width=True,
+            ):
+                try:
+                    connect_google_drive()
+                    status = (
+                        google_drive_connection_status()
+                    )
+                    st.success(
+                        "Google Driveへ"
+                        "接続しました。"
+                    )
+                except Exception as exception:
+                    st.error(
+                        "Google Drive接続エラー: "
+                        f"{type(exception).__name__}: "
+                        f"{exception}"
+                    )
+
+        with disconnect_column:
+            if st.button(
+                "Google接続を解除",
+                key=(
+                    "disconnect_google_drive"
+                ),
+                disabled=not status[
+                    "authorized"
+                ],
+                use_container_width=True,
+            ):
+                disconnect_google_drive()
+                status = (
+                    google_drive_connection_status()
+                )
+                st.info(
+                    "このMacに保存した"
+                    "Google認証を削除しました。"
+                )
+
+        if status["authorized"]:
+            st.success(
+                "Google Drive：接続済み"
+            )
+        else:
+            st.info(
+                "Google Drive：未接続"
+            )
+
+        drive_folder_value = st.text_input(
+            "KeirinAIフォルダのURL"
+            "（通常は空欄でOK）",
+            placeholder=(
+                "https://drive.google.com/"
+                "drive/folders/..."
+            ),
+            key=(
+                "google_drive_folder_value"
+            ),
+            help=(
+                "KeirinAIフォルダが複数ある"
+                "場合だけURLを貼り付けます。"
+                "1個なら自動検出します。"
+            ),
+        )
+
+        if st.button(
+            "Driveから予測を取り込む",
+            key=(
+                "import_google_drive_predictions"
+            ),
+            disabled=not status["authorized"],
+            type="primary",
+            use_container_width=True,
+        ):
             try:
                 mobile_import_result = (
-                    import_android_predictions(
-                        Path(
-                            mobile_prediction_directory
-                        )
+                    import_google_drive_predictions(
+                        drive_folder_value
                     )
                 )
                 st.session_state[
                     "android_prediction_import_result"
                 ] = mobile_import_result
                 st.success(
-                    "スマホ予測を取り込みました。"
-                    f" 新規 "
+                    "Driveのスマホ予測を"
+                    "取り込みました。"
+                    f" 対象 "
+                    f"{mobile_import_result['remote_file_count']}件、"
+                    f"新規 "
                     f"{mobile_import_result['imported_count']}件、"
                     f"重複 "
                     f"{mobile_import_result['duplicate_count']}件、"
@@ -1137,10 +1254,96 @@ with st.expander(
                 )
             except Exception as exception:
                 st.error(
-                    "スマホ予測取込エラー: "
+                    "Drive予測取込エラー: "
                     f"{type(exception).__name__}: "
                     f"{exception}"
                 )
+
+        st.markdown(
+            "[Google公式：Drive APIの"
+            "初期設定手順]"
+            "(https://developers.google.com/"
+            "workspace/drive/api/quickstart/"
+            "python?hl=ja)"
+        )
+
+    with local_folder_tab:
+        drive_directories = (
+            discover_google_drive_directories()
+        )
+        default_drive_directory = (
+            str(drive_directories[0])
+            if len(drive_directories) == 1
+            else ""
+        )
+        mobile_prediction_directory = (
+            st.text_input(
+                "Mac内のKeirinAIフォルダ",
+                value=default_drive_directory,
+                placeholder=(
+                    "/Users/.../Downloads/"
+                    "KeirinAI"
+                ),
+                key=(
+                    "android_prediction_directory"
+                ),
+            )
+        )
+
+        if len(drive_directories) > 1:
+            st.info(
+                "候補が複数あります。取り込む"
+                "KeirinAIフォルダを指定してください。\n\n"
+                + "\n".join(
+                    f"- `{path}`"
+                    for path in drive_directories
+                )
+            )
+        elif not drive_directories:
+            st.caption(
+                "Driveから手動ダウンロード"
+                "した場合は、解凍後の"
+                "KeirinAIフォルダのパスを"
+                "貼り付けてください。"
+            )
+
+        if st.button(
+            "Mac内フォルダから取り込む",
+            key="import_android_predictions",
+        ):
+            if not mobile_prediction_directory:
+                st.error(
+                    "KeirinAIフォルダを"
+                    "指定してください。"
+                )
+            else:
+                try:
+                    mobile_import_result = (
+                        import_android_predictions(
+                            Path(
+                                mobile_prediction_directory
+                            )
+                        )
+                    )
+                    st.session_state[
+                        "android_prediction_import_result"
+                    ] = mobile_import_result
+                    st.success(
+                        "スマホ予測を"
+                        "取り込みました。"
+                        f" 新規 "
+                        f"{mobile_import_result['imported_count']}件、"
+                        f"重複 "
+                        f"{mobile_import_result['duplicate_count']}件、"
+                        f"失敗 "
+                        f"{mobile_import_result['failed_count']}件。"
+                    )
+                except Exception as exception:
+                    st.error(
+                        "スマホ予測取込エラー: "
+                        f"{type(exception).__name__}: "
+                        f"{exception}"
+                    )
 
     mobile_import_result = (
         st.session_state.get(
